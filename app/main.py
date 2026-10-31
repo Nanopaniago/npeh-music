@@ -8,11 +8,12 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import discover, downloader, scanner, system
+from . import discover, downloader, lyrics, scanner, system
+from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
 from .db import get_conn, init_db, row, rows
@@ -370,29 +371,20 @@ def cover(album_id: int):
 CHUNK = 256 * 1024
 
 
-@app.get("/api/stream/{track_id}")
-def stream(track_id: int, request: Request):
-    t = row("SELECT path FROM tracks WHERE id=?", (track_id,))
-    if not t:
-        raise HTTPException(404)
-    path = (MUSIC_DIR / t["path"]).resolve()
-    if MUSIC_DIR not in path.parents or not path.exists():
-        raise HTTPException(404)
+def _serve_file(path: Path, request: Request, ctype: str, cache: str = "no-store"):
+    """Envia um ficheiro com suporte a Range (necessário para avançar/recuar numa música)."""
     size = path.stat().st_size
-    ctype = mimetypes.guess_type(path.name)[0] or "audio/mpeg"
-    if path.suffix.lower() == ".opus":
-        ctype = "audio/ogg"
     start, end = 0, size - 1
     rng = request.headers.get("range")
     status = 200
     if rng and rng.startswith("bytes="):
-        s, _, e = rng[6:].split(",")[0].partition("-")
+        s_, _, e_ = rng[6:].split(",")[0].partition("-")
         try:
-            if s:
-                start = int(s)
-                end = int(e) if e else size - 1
+            if s_:
+                start = int(s_)
+                end = int(e_) if e_ else size - 1
             else:
-                start = size - int(e)
+                start = size - int(e_)
         except ValueError:
             raise HTTPException(416)
         end = min(end, size - 1)
@@ -411,17 +403,65 @@ def stream(track_id: int, request: Request):
                 left -= len(data)
                 yield data
 
-    headers = {"Accept-Ranges": "bytes", "Content-Length": str(end - start + 1), "Cache-Control": "no-store"}
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(end - start + 1), "Cache-Control": cache}
     if status == 206:
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     return StreamingResponse(gen(), status_code=status, media_type=ctype, headers=headers)
+
+
+def _track_path(track_id: int):
+    t = row("SELECT path FROM tracks WHERE id=?", (track_id,))
+    if not t:
+        raise HTTPException(404)
+    path = (MUSIC_DIR / t["path"]).resolve()
+    if MUSIC_DIR not in path.parents or not path.exists():
+        raise HTTPException(404)
+    return path
+
+
+@app.get("/api/stream/{track_id}")
+def stream(track_id: int, request: Request):
+    path = _track_path(track_id)
+    ctype = mimetypes.guess_type(path.name)[0] or "audio/mpeg"
+    if path.suffix.lower() == ".opus":
+        ctype = "audio/ogg"
+    return _serve_file(path, request, ctype)
+
+
+def _canvas_file(track_path: Path):
+    """Vídeo curto (loop) opcional: <música>.canvas.mp4|webm ou canvas.mp4|webm na pasta do álbum."""
+    for ext in (".mp4", ".webm"):
+        for p in (Path(str(track_path.with_suffix("")) + ".canvas" + ext), track_path.parent / ("canvas" + ext)):
+            if p.exists():
+                return p
+    return None
+
+
+@app.get("/api/extras/{track_id}")
+async def extras(track_id: int):
+    """Letra + vídeo curto da faixa que está a tocar."""
+    path = _track_path(track_id)
+    ly = await asyncio.to_thread(lyrics.get, track_id)
+    return {"lyrics": ly, "canvas": _canvas_file(path) is not None}
+
+
+@app.get("/api/canvas/{track_id}")
+def canvas(track_id: int, request: Request):
+    p = _canvas_file(_track_path(track_id))
+    if not p:
+        raise HTTPException(404)
+    return _serve_file(p, request, "video/webm" if p.suffix == ".webm" else "video/mp4", "public, max-age=3600")
 
 
 # ---------------------------------------------------------------- downloads & scan
 @app.post("/api/downloads")
 def new_download(query: str | None = Body(None, embed=True),
                  queries: list[str] | None = Body(None, embed=True),
+                 items: list[dict] | None = Body(None, embed=True),
                  label: str | None = Body(None, embed=True)):
+    if items:  # músicas conhecidas: o servidor ignora as que já tens ou já estão na fila
+        jid, queued, skipped = downloader.enqueue_items(items, (label or "")[:160] or None)
+        return {"ids": [jid] if jid else [], "queued": queued, "skipped": skipped}
     if queries:  # vários pedidos num só job (ex.: um álbum inteiro)
         qs = [q.strip() for q in queries if q and q.strip()][:200]
         if not qs:
@@ -452,6 +492,16 @@ def cancel_download(job_id: int):
         c = get_conn()
         c.execute("DELETE FROM jobs WHERE id=?", (job_id,))
         c.commit()
+    return {"ok": True}
+
+
+@app.post("/api/downloads/archive/clear")
+def clear_archive():
+    """Esquece o histórico do spotDL (útil se apagaste ficheiros e queres voltar a descarregá-los)."""
+    try:
+        downloader.ARCHIVE.unlink()
+    except FileNotFoundError:
+        pass
     return {"ok": True}
 
 
@@ -530,12 +580,25 @@ def system_info():
                 "(SELECT COUNT(*) FROM artists) AS artists FROM tracks")
     return {"music_dir": str(MUSIC_DIR), "download_dir": str(app_settings.download_path(s)),
             "disk": system.disk(), "library": stats, "scan": scanner.state,
-            "auth_enabled": bool(APP_PASSWORD)}
+            "auth_enabled": bool(APP_PASSWORD), "lyrics": lyrics.stats(),
+            "archive": downloader.ARCHIVE.exists() and sum(1 for _ in open(downloader.ARCHIVE, errors="ignore"))}
 
 
 @app.get("/api/system/versions")
 async def system_versions(refresh: bool = False):
     return await asyncio.to_thread(system.versions, refresh)
+
+
+@app.post("/api/lyrics/prefetch")
+async def lyrics_prefetch():
+    if not lyrics.state["running"]:
+        asyncio.get_running_loop().run_in_executor(None, lyrics.prefetch, None)
+    return {"started": True}
+
+
+@app.get("/api/lyrics/status")
+def lyrics_status():
+    return lyrics.stats()
 
 
 @app.post("/api/system/update-ytdlp")
@@ -544,6 +607,16 @@ async def update_ytdlp():
         return await asyncio.to_thread(system.update_ytdlp)
     except Exception as e:  # noqa
         raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------- controlo remoto (WebSocket)
+@app.websocket("/api/ws")
+async def ws_endpoint(ws: WebSocket):
+    if APP_PASSWORD and not hmac.compare_digest(ws.cookies.get(COOKIE, ""), _token()):
+        await ws.close(code=4401)
+        return
+    await ws.accept()
+    await hub.serve(ws)
 
 
 # ---------------------------------------------------------------- frontend

@@ -4,13 +4,11 @@ Dá-nos capas e uma prévia de 30 s por faixa. O download em si continua a ser f
 a partir do texto "Artista - Título".
 """
 import json
-import re
 import time
-import unicodedata
 import urllib.parse
 import urllib.request
 
-from .db import get_conn
+from . import dedupe
 
 API = "https://api.deezer.com"
 _cache = {}
@@ -76,29 +74,13 @@ def _artist(a):
     }
 
 
-# ---------------------------------------------------------------- "já está na biblioteca?"
-def _norm(s):
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
-    s = re.sub(r"\(.*?\)|\[.*?\]", "", s)
-    s = re.split(r"\s-\s", s)[0]
-    s = re.sub(r"[^a-z0-9 ]", " ", s)
-    return " ".join(s.split())
-
-
-def _library_index():
-    idx = {}
-    for r in get_conn().execute("SELECT title, artist FROM tracks"):
-        nt = _norm(r["title"])
-        if nt:
-            idx.setdefault(nt, []).append(_norm(r["artist"]))
-    return idx
-
-
+# ---------------------------------------------------------------- "já está na biblioteca / na fila?"
 def mark_library(tracks):
-    idx = _library_index()
+    lib, pend = dedupe.library_index(), dedupe.pending_keys()
     for t in tracks:
-        nt, na = _norm(t["title"]), _norm(t["artist"])
-        t["in_library"] = bool(nt and na and any(na in a or a in na for a in idx.get(nt, [])))
+        st = dedupe.status(t["title"], t["artist"], t.get("duration"), lib, pend)
+        t["in_library"] = st == "library"
+        t["pending"] = st == "pending"
     return tracks
 
 
@@ -126,7 +108,7 @@ def artist_detail(aid):
     albums = _get(f"/artist/{int(aid)}/albums", {"limit": 60})["data"]
     seen, uniq = set(), []
     for al in albums:
-        key = _norm(al.get("title", ""))
+        key = dedupe.norm(al.get("title", ""))
         if key in seen:
             continue
         seen.add(key)

@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 
-from .config import MUSIC_DIR, SPOTDL_BITRATE, SPOTDL_FORMAT, SPOTDL_OUTPUT, SPOTDL_THREADS
+from .config import MUSIC_DIR, SPOTDL_OUTPUT, SPOTDL_THREADS
 from .db import get_conn
 
 STRUCTURES = {
@@ -12,8 +12,9 @@ STRUCTURES = {
     "album": "{album}/{track-number} - {title}.{output-ext}",
     "flat": "{artist} - {title}.{output-ext}",
 }
-FORMATS = ("mp3", "m4a", "opus", "flac", "ogg", "wav")
-BITRATES = ("auto", "128k", "192k", "256k", "320k")
+# "original" = guarda o stream do YouTube sem reconverter (a melhor qualidade que existe na fonte)
+FORMATS = ("original", "m4a", "mp3", "ogg", "flac", "wav")
+BITRATES = ("disable", "auto", "128k", "192k", "256k", "320k")
 SCAN_OPTIONS = (0, 15, 60, 360, 1440)
 LOSSLESS = {"flac", "wav"}
 
@@ -38,9 +39,10 @@ DEFAULTS = {
     "dl_subfolder": "",
     "dl_structure": _default_structure(),
     "dl_template": SPOTDL_OUTPUT,
-    "dl_format": SPOTDL_FORMAT if SPOTDL_FORMAT in FORMATS else "mp3",
-    "dl_bitrate": SPOTDL_BITRATE if SPOTDL_BITRATE in BITRATES else "320k",
+    "dl_format": "original",
+    "dl_bitrate": "320k",
     "dl_threads": _clamp_int(SPOTDL_THREADS, 1, 4, 2),
+    "dl_lyrics": True,
 }
 
 class SettingError(ValueError):
@@ -82,7 +84,13 @@ def _validate(key, v):
         if s.startswith("/") or ".." in s or len(s) > 200 or "\x00" in s:
             raise SettingError("Modelo inválido: não use caminhos absolutos nem '..'.")
         return s
+    if key == "dl_lyrics":
+        if isinstance(v, bool):
+            return v
+        raise SettingError("Valor inválido.")
     if key == "dl_format":
+        if v == "opus":  # nome antigo
+            return "original"
         if v not in FORMATS:
             raise SettingError("Formato inválido.")
         return v

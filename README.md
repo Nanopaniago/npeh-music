@@ -2,13 +2,17 @@
 
 O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietPi.
 
-- **Downloads**: pesquisa por nome de música, álbum ou artista (com pré-visualização de 30 s) ou cola links do Spotify. O spotDL descarrega e a biblioteca atualiza-se sozinha.
-- **Streaming**: início, pesquisa, álbuns, artistas, playlists, "Músicas de que gostas", fila, aleatório, repetir e controlos no ecrã de bloqueio do telemóvel.
-- **Configurações**: crossfade, pasta e estrutura dos downloads, formato e qualidade, verificação automática da pasta e atualização do yt-dlp.
+- **Downloads**: pesquisa por nome de música, álbum ou artista (com pré-visualização de 30 s) ou cola links do Spotify. O spotDL descarrega e a biblioteca atualiza-se sozinha. Nunca descarrega duas vezes a mesma música.
+- **Qualidade**: por defeito guarda o áudio original do YouTube (Opus) sem o reconverter. Também há M4A, MP3, OGG, FLAC e WAV nas Configurações.
+- **Capa e letra**: a capa vem embutida em todos os ficheiros e a letra (sincronizada, quando existir) é gravada nas tags e num `.lrc`. O ecrã "Agora a tocar" mostra a letra a acompanhar a música.
+- **Vídeo curto (Canvas)**: o Spotify não disponibiliza os seus Canvas. Se puseres um `canvas.mp4` na pasta do álbum, ou `Título.canvas.mp4` ao lado da música, o ecrã "Agora a tocar" mostra-o em loop; sem vídeo, a capa anima-se devagar.
+- **Offline**: guarda músicas, álbuns e playlists no dispositivo e toca sem internet.
+- **Dispositivos**: controla a reprodução de outro dispositivo (telemóvel ↔ computador), como o Spotify Connect.
+- **Streaming**: início, pesquisa, álbuns, artistas, playlists, "Músicas de que gostas", fila, aleatório, repetir, crossfade e controlos no ecrã de bloqueio.
 - **PWA**: instala-se no telemóvel e funciona através do Cloudflare Tunnel, protegida por login.
 - **Leve**: um único container com FastAPI e SQLite, limitado a 512 MB de RAM no compose.
 
-A pesquisa e as pré-visualizações usam a API pública do Deezer (grátis, sem chave). Os downloads continuam a vir do YouTube, através do spotDL.
+A pesquisa e as pré-visualizações usam a API pública do Deezer e as letras vêm do LRCLIB (ambos grátis, sem chave). Os downloads continuam a vir do YouTube, através do spotDL.
 
 ---
 
@@ -76,8 +80,7 @@ Depois, no telemóvel, abre `https://music.digitalnpeh.xyz`:
 |---|---|
 | `APP_PASSWORD` | Palavra-passe de acesso. Se ficar vazia, o login fica desligado (usa só em rede local). |
 | `SPOTIFY_CLIENT_ID` / `SECRET` | Credenciais próprias da Spotify API, que evitam erros de *rate limit*. Cria-as em developer.spotify.com. |
-| `SPOTDL_FORMAT` / `BITRATE` | `mp3`/`320k` por omissão. Também aceita `m4a`, `opus`, `flac`… |
-| `SPOTDL_OUTPUT` | Modelo das pastas. Por omissão: `Artista/Álbum/01 - Título.mp3`. |
+| `SPOTDL_OUTPUT` | Modelo inicial das pastas. Depois muda-se nas Configurações. |
 | `SPOTDL_EXTRA_ARGS` | Argumentos extra, por exemplo `--cookie-file /data/cookies.txt` para usar a qualidade do YouTube Music Premium. |
 | `UPDATE_YTDLP` | Atualiza o yt-dlp a cada arranque (`1`). Resolve a maioria das falhas de download. |
 
@@ -117,3 +120,9 @@ app/
   db.py, config.py
   static/        interface (HTML/CSS/JS sem build), service worker, ícones
 ```
+
+## Controlo remoto, offline e Cloudflare
+
+- **Dispositivos**: usa o WebSocket `/api/ws`. O Cloudflare Tunnel deixa-o passar sem configuração extra.
+- **Offline**: as músicas guardam-se na cache do browser de cada dispositivo. No iPhone, instala a app no ecrã principal para o iOS não apagar a cache.
+- O dispositivo que recebe a reprodução tem de ter o Pobrefy aberto e ter tido pelo menos um toque no ecrã, porque os browsers bloqueiam áudio sem interação.

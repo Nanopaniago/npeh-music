@@ -362,30 +362,9 @@ input, textarea { font: inherit; color: inherit; }
   .dl-box { padding: 18px; }
   .top-result .t { font-size: 24px; }
 
-  .now-full:not([hidden]) { display: flex; flex-direction: column; position: fixed; inset: 0; z-index: 80; padding: calc(12px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); background: linear-gradient(var(--np-bg, #535353), #121212 85%); animation: up .25s ease-out; }
-  @keyframes up { from { transform: translateY(100%); } to { transform: none; } }
-  .now-full header { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 700; }
-  .now-full header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; }
-  .nf-cover { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; margin: auto 0; max-height: 56vh; box-shadow: 0 16px 48px #00000080; }
-  .nf-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 12px; }
-  .nf-meta > div { min-width: 0; }
-  .nf-title { font-size: 22px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nf-artist { color: #ffffffb3; font-size: 16px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .now-full .slider::before { background: #ffffff4d; }
-  .now-full .slider .knob { opacity: 1; }
-  .now-full .slider .fill { background: #fff !important; }
-  .nf-times { display: flex; justify-content: space-between; font-size: 12px; color: #ffffffb3; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .nf-controls { display: flex; justify-content: space-between; align-items: center; margin: 16px 0 12px; }
-  .nf-controls .icon-btn { color: #fff; }
-  .nf-controls .icon-btn.on { color: var(--green); }
-  .icon-btn.big .i { width: 36px; height: 36px; }
-  .play-btn.huge { width: 68px; height: 68px; }
-  .play-btn.huge .i { width: 30px; height: 30px; }
-  .nf-bottom { display: flex; justify-content: flex-end; }
 }
 .mini-play { display: none !important; width: 40px; height: 40px; color: #fff; }
 .tracks + .section, .tracks + section { margin-top: 40px; }
-@media (max-width: 760px) { .now-full .slider { flex: none; height: 20px; } .now-full .nf-controls { margin-top: 20px; } }
 
 /* ---------- Downloads: pesquisa + prévia ---------- */
 .dl-search { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
@@ -486,3 +465,89 @@ code.path { font-size: 13px; padding: 8px 12px; word-break: break-all; }
   .disk { flex: 1; }
 }
 .player.idle .like-btn { visibility: hidden; }
+
+
+/* ---------- Agora a tocar (letra + vídeo) ---------- */
+.now-full:not([hidden]) { display: flex; flex-direction: column; position: fixed; inset: 0; z-index: 80; overflow: hidden;
+  padding: calc(12px + env(safe-area-inset-top)) 24px calc(20px + env(safe-area-inset-bottom));
+  background: linear-gradient(var(--np-bg, #535353), #121212 90%); animation: up .25s ease-out; }
+@keyframes up { from { transform: translateY(100%); } to { transform: none; } }
+.nf-bg { position: absolute; inset: -20%; background-size: cover; background-position: center; filter: blur(70px) saturate(1.5); opacity: .5; z-index: 0; pointer-events: none;
+  animation: drift 28s ease-in-out infinite alternate; animation-play-state: paused; }
+.now-full.is-playing .nf-bg { animation-play-state: running; }
+@keyframes drift { from { transform: scale(1.1) translate(-3%, -2%) rotate(0deg); } to { transform: scale(1.35) translate(4%, 3%) rotate(6deg); } }
+.now-full > * { position: relative; z-index: 1; }
+.now-full > .nf-bg { position: absolute; }
+.now-full header { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 700; flex: none; }
+.now-full header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; }
+.nf-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; gap: clamp(32px, 6vw, 96px); padding: 12px 0; }
+.nf-media { position: relative; width: min(46vh, 440px); aspect-ratio: 1; flex: none; border-radius: 12px; overflow: hidden; box-shadow: 0 16px 56px #000000a0; background: #000; }
+.nf-cover, .nf-media video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.nf-media video[hidden] { display: none; }
+.nf-media.has-canvas .nf-cover { display: none; }
+/* sem vídeo: a capa mexe-se devagar enquanto toca (efeito "Ken Burns") */
+.nf-media:not(.has-canvas) .nf-cover { animation: kenburns 22s ease-in-out infinite alternate; animation-play-state: paused; }
+.now-full.is-playing .nf-media:not(.has-canvas) .nf-cover { animation-play-state: running; }
+@keyframes kenburns { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.12) translate(-2.5%, -2%); } }
+.nf-lyrics { flex: 1; max-width: 640px; height: 100%; max-height: 62vh; overflow-y: auto; scrollbar-width: none; position: relative;
+  -webkit-mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent); }
+.nf-lyrics::-webkit-scrollbar { display: none; }
+.ly-inner { padding: 30vh 0; }
+.ly-line { font-size: clamp(22px, 2.6vw, 34px); font-weight: 800; line-height: 1.3; letter-spacing: -.01em; padding: 8px 0; color: #ffffff59; cursor: pointer; transition: color .25s, transform .25s; transform-origin: left center; }
+.ly-line:hover { color: #ffffffb3; }
+.ly-line.past { color: #ffffff8c; }
+.ly-line.active { color: #fff; transform: scale(1.03); }
+.ly-plain { font-size: clamp(18px, 2vw, 24px); font-weight: 700; line-height: 1.55; color: #ffffffd9; white-space: pre-wrap; padding: 24px 0 40vh; }
+.ly-msg { color: #ffffffa6; font-size: 18px; font-weight: 600; padding: 40px 0; }
+.ly-src { font-size: 12px; color: #ffffff80; font-weight: 500; margin-top: 24px; }
+.nf-foot { flex: none; width: min(760px, 100%); margin: 0 auto; }
+.nf-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 12px; }
+.nf-meta > div { min-width: 0; }
+.nf-title { font-size: 22px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nf-artist { color: #ffffffb3; font-size: 16px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now-full .slider { height: 20px; }
+.now-full .slider::before { background: #ffffff4d; }
+.now-full .slider .knob { opacity: 1; }
+.now-full .slider .fill { background: #fff !important; }
+.nf-times { display: flex; justify-content: space-between; font-size: 12px; color: #ffffffb3; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.nf-controls { display: flex; justify-content: space-between; align-items: center; margin: 12px auto; max-width: 520px; }
+.nf-controls .icon-btn { color: #fff; }
+.nf-controls .icon-btn.on { color: var(--green); }
+.icon-btn.big .i { width: 36px; height: 36px; }
+.play-btn.huge { width: 64px; height: 64px; }
+.play-btn.huge .i { width: 28px; height: 28px; }
+.nf-bottom { display: flex; justify-content: center; gap: 32px; }
+.nf-bottom .icon-btn { color: #ffffffb3; }
+.nf-bottom .icon-btn:hover, .nf-bottom .icon-btn.on { color: var(--green); }
+.only-mobile { display: none; }
+.np-remote { font-size: 12px; color: var(--green); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player.remote .np-artist { display: none; }
+.dev-count { position: absolute; top: -6px; right: -8px; background: var(--green); color: #000; font-size: 10px; font-weight: 800; min-width: 15px; height: 15px; border-radius: 99px; display: grid; place-items: center; padding: 0 3px; }
+#btn-devices { position: relative; }
+#btn-devices.on, #btn-devices.on:hover { color: var(--green); }
+
+/* offline / dispositivos */
+.off-mark { display: inline-block; vertical-align: -3px; margin-left: 6px; color: var(--green); }
+.off-mark .i { width: 14px; height: 14px; }
+.dev-item { align-items: flex-start !important; }
+.dev-item .i.k { width: 22px !important; height: 22px !important; margin-top: 2px; }
+.dev-item b { display: block; font-weight: 600; }
+.dev-item small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.dev-item.on, .dev-item.on .i { color: var(--green) !important; }
+.ctx-menu .dev-head { padding: 10px 12px 6px; font-weight: 700; font-size: 14px; color: #fff; }
+.set-ctl .switch { width: 44px; height: 24px; accent-color: var(--green); }
+.chk { width: 20px; height: 20px; accent-color: var(--green); cursor: pointer; }
+
+@media (max-width: 760px) {
+  .only-mobile { display: inline-flex; }
+  .now-full:not([hidden]) { padding-left: 20px; padding-right: 20px; }
+  .nf-stage { flex-direction: column; justify-content: center; gap: 12px; }
+  .nf-media { width: min(100%, 52vh); }
+  .nf-lyrics { display: none; width: 100%; max-width: none; max-height: none; flex: 1; }
+  .now-full.lyrics-on .nf-media { display: none; }
+  .now-full.lyrics-on .nf-lyrics { display: block; }
+  .ly-line { font-size: 26px; }
+  .nf-bottom { justify-content: space-between; padding: 0 8px; }
+  #btn-lyrics { display: none; }
+}
+@media (min-width: 761px) and (max-height: 700px) { .nf-media { width: min(40vh, 360px); } }

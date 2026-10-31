@@ -61,6 +61,24 @@ CREATE TABLE IF NOT EXISTS plays (
     played_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_plays_time ON plays(played_at);
+CREATE TABLE IF NOT EXISTS dl_items (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    artist TEXT,
+    title TEXT,
+    duration REAL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dli_key ON dl_items(key, status);
+CREATE TABLE IF NOT EXISTS lyrics (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    synced TEXT,
+    plain TEXT,
+    source TEXT,
+    fetched_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -109,6 +127,7 @@ def init_db():
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     if "label" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN label TEXT")
+    conn.execute("DELETE FROM dl_items WHERE status NOT IN ('queued','running') AND created_at < strftime('%s','now') - 2592000")
     conn.commit()
 
 
