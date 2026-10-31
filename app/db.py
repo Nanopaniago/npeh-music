@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS plays (
     played_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_plays_time ON plays(played_at);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
     query TEXT NOT NULL,
@@ -101,6 +105,10 @@ def tx():
 def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    # migração: coluna "label" nos downloads (bases de dados criadas antes desta versão)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    if "label" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN label TEXT")
     conn.commit()
 
 

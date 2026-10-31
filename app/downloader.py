@@ -1,4 +1,8 @@
-"""Fila de downloads com spotDL (um job de cada vez para poupar RAM/CPU)."""
+"""Fila de downloads com spotDL (um job de cada vez para poupar RAM/CPU).
+
+Um job pode ter vários pedidos (um por linha em `query`), por exemplo todas as faixas de um álbum.
+As opções (formato, qualidade, pasta, estrutura) vêm das Configurações.
+"""
 import asyncio
 import logging
 import re
@@ -7,8 +11,8 @@ import shutil
 import time
 
 from . import scanner
-from .config import (MUSIC_DIR, SPOTDL_BITRATE, SPOTDL_EXTRA_ARGS, SPOTDL_FORMAT, SPOTDL_OUTPUT,
-                     SPOTDL_THREADS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)
+from . import settings as app_settings
+from .config import MUSIC_DIR, SPOTDL_EXTRA_ARGS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from .db import get_conn, row
 
 log = logging.getLogger("downloader")
@@ -19,6 +23,7 @@ _current = {"job_id": None, "proc": None}
 RE_FOUND = re.compile(r"Found (\d+) songs?", re.I)
 RE_DONE = re.compile(r'^\s*(Downloaded|Skipping)\b', re.I)
 RE_FAIL = re.compile(r"(LookupError|AudioProviderError|DownloaderError|No results found|Failed to download)", re.I)
+RE_URL = re.compile(r"(open\.spotify\.com|^spotify:|youtu)", re.I)
 MAX_LOG = 20000
 
 
@@ -42,16 +47,18 @@ def _append_log(job_id, line):
     conn.commit()
 
 
-def build_cmd(query: str):
+def build_cmd(queries, s):
+    fmt = s["dl_format"]
     cmd = [
-        "spotdl", "download", query,
-        "--output", SPOTDL_OUTPUT,
-        "--format", SPOTDL_FORMAT,
-        "--bitrate", SPOTDL_BITRATE,
-        "--threads", str(SPOTDL_THREADS),
+        "spotdl", "download", *queries,
+        "--output", app_settings.template(s),
+        "--format", fmt,
+        "--threads", str(s["dl_threads"]),
         "--simple-tui",
         "--overwrite", "skip",
     ]
+    if fmt not in app_settings.LOSSLESS:
+        cmd += ["--bitrate", s["dl_bitrate"]]
     if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
         cmd += ["--client-id", SPOTIFY_CLIENT_ID, "--client-secret", SPOTIFY_CLIENT_SECRET]
     if SPOTDL_EXTRA_ARGS:
@@ -59,38 +66,53 @@ def build_cmd(query: str):
     return cmd
 
 
-def enqueue(query: str) -> int:
+def enqueue(query: str, label: str | None = None) -> int:
     conn = get_conn()
-    cur = conn.execute("INSERT INTO jobs(query) VALUES (?)", (query.strip(),))
+    cur = conn.execute("INSERT INTO jobs(query, label) VALUES (?, ?)", (query.strip(), label))
     conn.commit()
     queue.put_nowait(cur.lastrowid)
     return cur.lastrowid
+
+
+def _split(query: str):
+    # um "-" no início seria lido como opção pelo spotDL
+    return [q.strip().lstrip("-").strip() for q in query.split("\n") if q.strip().lstrip("-").strip()]
 
 
 async def _run_job(job_id: int):
     job = row("SELECT * FROM jobs WHERE id=?", (job_id,))
     if not job or job["status"] == "cancelled":
         return
+    queries = _split(job["query"])
     _update(job_id, status="running", log="", done=0, failed=0, total=0)
     if not spotdl_available():
         _append_log(job_id, "spotdl não está instalado no container.")
         _update(job_id, status="failed", finished_at=int(time.time()))
         return
-    cmd = build_cmd(job["query"])
-    _append_log(job_id, "$ " + " ".join(shlex.quote(c) for c in cmd[:3]) + " …")
+    s = app_settings.get_all()
+    workdir = app_settings.download_path(s)
+    workdir.mkdir(parents=True, exist_ok=True)
+    cmd = build_cmd(queries, s)
+    _append_log(job_id, f"→ pasta: {workdir}")
+    _append_log(job_id, f"→ {len(queries)} pedido(s), formato {s['dl_format']}"
+                + ("" if s["dl_format"] in app_settings.LOSSLESS else f" {s['dl_bitrate']}"))
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=str(MUSIC_DIR),
+        *cmd, cwd=str(workdir),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     _current.update(job_id=job_id, proc=proc)
-    done = failed = total = 0
+    multi_search = len(queries) > 1 and not any(RE_URL.search(q) for q in queries)
+    total = len(queries) if multi_search else 0
+    if total:
+        _update(job_id, total=total)
+    done = failed = 0
     async for raw in proc.stdout:
         line = raw.decode(errors="replace").rstrip()
         if not line.strip():
             continue
         _append_log(job_id, line)
-        if m := RE_FOUND.search(line):
-            total = int(m.group(1))
+        if not multi_search and (m := RE_FOUND.search(line)):
+            total = max(total, int(m.group(1)))
         elif RE_DONE.search(line):
             done += 1
         elif RE_FAIL.search(line):

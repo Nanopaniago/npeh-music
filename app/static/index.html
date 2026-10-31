@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
-  <link rel="stylesheet" href="/static/style.css?v=1">
+  <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
   <div id="app" class="layout">
@@ -24,6 +24,7 @@
         <a href="#/" data-nav="home"><svg class="i"><use href="#i-home"/></svg>Início</a>
         <a href="#/search" data-nav="search"><svg class="i"><use href="#i-search"/></svg>Pesquisar</a>
         <a href="#/downloads" data-nav="downloads"><svg class="i"><use href="#i-download"/></svg>Downloads <span class="badge" id="dl-badge" hidden></span></a>
+        <a href="#/settings" data-nav="settings"><svg class="i"><use href="#i-gear"/></svg>Configurações</a>
       </nav>
       <section class="panel library">
         <header class="lib-head">
@@ -50,6 +51,7 @@
           <input id="search-input" type="search" placeholder="O que queres ouvir?" autocomplete="off">
         </div>
         <div class="top-actions">
+          <a class="pill-btn" href="#/settings" title="Configurações"><svg class="i"><use href="#i-gear"/></svg><span>Configurações</span></a>
           <button class="pill-btn" data-action="rescan" title="Voltar a ler a pasta de música"><svg class="i"><use href="#i-refresh"/></svg><span>Atualizar biblioteca</span></button>
         </div>
       </div>
@@ -167,8 +169,10 @@
     <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 4v10.6A3.5 3.5 0 1 0 11 18V8h8V4Z" fill="currentColor"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><path d="M12 3a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 11c4.4 0 8 2 8 5v2H4v-2c0-3 3.6-5 8-5Z" fill="currentColor"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4Zm-3 6h12l-1 12H7Z" fill="currentColor"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4Z" fill="currentColor"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61ZM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6Z" fill="currentColor"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15.2 3.8 5 5L9 20H4v-5Zm0 2.8L6 15.8V18h2.2l9.2-9.2Z" fill="currentColor"/></symbol>
   </svg>
-  <script src="/static/app.js?v=1"></script>
+  <script src="/static/app.js?v=2"></script>
 </body>
 </html>

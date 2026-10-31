@@ -1,6 +1,6 @@
 // Service worker: guarda a "casca" da app para abrir instantaneamente; a música e a API vão sempre à rede.
-const CACHE = 'npeh-music-v1';
-const SHELL = ['/', '/static/style.css?v=1', '/static/app.js?v=1', '/static/icons/icon.svg', '/static/icons/icon-192.png', '/manifest.webmanifest'];
+const CACHE = 'npeh-music-v2';
+const SHELL = ['/', '/static/style.css?v=2', '/static/app.js?v=2', '/static/icons/icon.svg', '/static/icons/icon-192.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

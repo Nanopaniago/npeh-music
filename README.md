@@ -2,10 +2,13 @@
 
 O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietPi.
 
-- **Downloads**: cola links do Spotify (faixa, álbum, playlist ou artista) ou escreve "artista - música". O spotDL descarrega e a biblioteca atualiza-se sozinha.
-- **Streaming**: início, pesquisa, álbuns, artistas, playlists, músicas de que gostas, fila, aleatório e repetir. Também tem controlos no ecrã de bloqueio do telemóvel.
+- **Downloads**: pesquisa por nome de música, álbum ou artista (com pré-visualização de 30 s) ou cola links do Spotify. O spotDL descarrega e a biblioteca atualiza-se sozinha.
+- **Streaming**: início, pesquisa, álbuns, artistas, playlists, "Músicas de que gostas", fila, aleatório, repetir e controlos no ecrã de bloqueio do telemóvel.
+- **Configurações**: crossfade, pasta e estrutura dos downloads, formato e qualidade, verificação automática da pasta e atualização do yt-dlp.
 - **PWA**: instala-se no telemóvel e funciona através do Cloudflare Tunnel, protegida por login.
-- **Leve**: um único container com FastAPI e SQLite. Fica com cerca de 80–150 MB de RAM em repouso, limitado a 512 MB no compose.
+- **Leve**: um único container com FastAPI e SQLite, limitado a 512 MB de RAM no compose.
+
+A pesquisa e as pré-visualizações usam a API pública do Deezer (grátis, sem chave). Os downloads continuam a vir do YouTube, através do spotDL.
 
 ---
 
@@ -78,7 +81,15 @@ Depois, no telemóvel, abre `https://music.digitalnpeh.xyz`:
 | `SPOTDL_EXTRA_ARGS` | Argumentos extra, por exemplo `--cookie-file /data/cookies.txt` para usar a qualidade do YouTube Music Premium. |
 | `UPDATE_YTDLP` | Atualiza o yt-dlp a cada arranque (`1`). Resolve a maioria das falhas de download. |
 
-## 6. Manutenção
+## 6. Atualizar o Pobrefy
+
+```bash
+cd /opt/npeh-music
+git pull
+docker compose up -d --build
+```
+
+## 7. Manutenção
 
 ```bash
 docker compose logs -f              # ver o que se passa

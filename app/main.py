@@ -12,7 +12,8 @@ from fastapi import Body, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import downloader, scanner
+from . import discover, downloader, scanner, system
+from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
 from .db import get_conn, init_db, row, rows
 
@@ -21,10 +22,22 @@ STATIC = Path(__file__).parent / "static"
 COOKIE = "npeh_session"
 
 
+async def auto_scan_loop():
+    """Volta a ler a pasta de música de X em X minutos (configurável)."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            mins = app_settings.get_all()["auto_scan_min"]
+            if mins and not scanner.state["running"] and time.time() - (scanner.state["last_run"] or 0) >= mins * 60:
+                await asyncio.to_thread(scanner.scan)
+        except Exception:  # noqa
+            logging.getLogger("auto_scan").exception("falhou")
+
+
 @asynccontextmanager
 async def lifespan(app):
     init_db()
-    tasks = [asyncio.create_task(downloader.worker())]
+    tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop())]
     if SCAN_ON_START:
         tasks.append(asyncio.create_task(asyncio.to_thread(scanner.scan)))
     yield
@@ -406,8 +419,15 @@ def stream(track_id: int, request: Request):
 
 # ---------------------------------------------------------------- downloads & scan
 @app.post("/api/downloads")
-def new_download(query: str = Body(..., embed=True)):
-    q = query.strip()
+def new_download(query: str | None = Body(None, embed=True),
+                 queries: list[str] | None = Body(None, embed=True),
+                 label: str | None = Body(None, embed=True)):
+    if queries:  # vários pedidos num só job (ex.: um álbum inteiro)
+        qs = [q.strip() for q in queries if q and q.strip()][:200]
+        if not qs:
+            raise HTTPException(400, "Sem pedidos")
+        return {"ids": [downloader.enqueue("\n".join(qs), (label or "")[:160] or None)]}
+    q = (query or "").strip()
     if not q:
         raise HTTPException(400, "Link ou pesquisa vazia")
     ids = [downloader.enqueue(part.strip()) for part in q.splitlines() if part.strip()]
@@ -416,7 +436,7 @@ def new_download(query: str = Body(..., embed=True)):
 
 @app.get("/api/downloads")
 def list_downloads():
-    jobs = rows("SELECT id, query, status, total, done, failed, created_at, finished_at, "
+    jobs = rows("SELECT id, query, label, status, total, done, failed, created_at, finished_at, "
                 "substr(log, -1500) AS log_tail FROM jobs ORDER BY id DESC LIMIT 50")
     return {"jobs": jobs, "spotdl": downloader.spotdl_available()}
 
@@ -453,6 +473,77 @@ async def rescan(full: bool = False):
 @app.get("/api/scan")
 def scan_status():
     return scanner.state
+
+
+# ---------------------------------------------------------------- descobrir (Deezer)
+@app.get("/api/discover/search")
+async def discover_search(q: str, type: str = "track"):
+    q = q.strip()
+    if type not in ("track", "album", "artist"):
+        raise HTTPException(400, "Tipo inválido")
+    if len(q) < 2:
+        return {"items": []}
+    try:
+        return {"items": await asyncio.to_thread(discover.search, q, type)}
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"Não foi possível pesquisar no Deezer ({e})")
+
+
+@app.get("/api/discover/album/{aid}")
+async def discover_album(aid: int):
+    try:
+        return await asyncio.to_thread(discover.album_detail, aid)
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"Não foi possível abrir o álbum ({e})")
+
+
+@app.get("/api/discover/artist/{aid}")
+async def discover_artist(aid: int):
+    try:
+        return await asyncio.to_thread(discover.artist_detail, aid)
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"Não foi possível abrir o artista ({e})")
+
+
+# ---------------------------------------------------------------- configurações
+@app.get("/api/settings")
+def get_settings():
+    return {
+        "values": app_settings.get_all(),
+        "options": {"formats": app_settings.FORMATS, "bitrates": app_settings.BITRATES,
+                    "scan": app_settings.SCAN_OPTIONS, "structures": app_settings.STRUCTURES},
+    }
+
+
+@app.put("/api/settings")
+def put_settings(data: dict = Body(...)):
+    try:
+        return {"values": app_settings.update(data)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/system")
+def system_info():
+    s = app_settings.get_all()
+    stats = row("SELECT COUNT(*) AS tracks, (SELECT COUNT(*) FROM albums) AS albums, "
+                "(SELECT COUNT(*) FROM artists) AS artists FROM tracks")
+    return {"music_dir": str(MUSIC_DIR), "download_dir": str(app_settings.download_path(s)),
+            "disk": system.disk(), "library": stats, "scan": scanner.state,
+            "auth_enabled": bool(APP_PASSWORD)}
+
+
+@app.get("/api/system/versions")
+async def system_versions(refresh: bool = False):
+    return await asyncio.to_thread(system.versions, refresh)
+
+
+@app.post("/api/system/update-ytdlp")
+async def update_ytdlp():
+    try:
+        return await asyncio.to_thread(system.update_ytdlp)
+    except Exception as e:  # noqa
+        raise HTTPException(400, str(e))
 
 
 # ---------------------------------------------------------------- frontend

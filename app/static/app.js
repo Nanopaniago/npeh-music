@@ -101,7 +101,20 @@ let listSeq = 0;
 function registerList(tracks, ctx) { const k = 'l' + ++listSeq; lists[k] = { tracks, ctx }; return k; }
 
 // ------------------------------------------------------------------ player
-const audio = $('#audio');
+let S = { crossfade: 0 };            // definições (vêm do servidor)
+const els = [$('#audio'), new Audio()]; // dois elementos: permitem o crossfade
+els.forEach((e) => { e.preload = 'auto'; });
+let audio = els[0];                   // o elemento "ativo" (faixa atual)
+let master = 0.8, muted = false;      // volume geral
+const volumeSupported = (() => { try { const t = new Audio(); t.volume = 0.5; return t.volume === 0.5; } catch { return false; } })();
+const xf = { timer: null, el: null }; // el = elemento que está a desvanecer
+const cfSeconds = () => (volumeSupported ? Math.min(12, Math.max(0, +S.crossfade || 0)) : 0);
+function applyVolume() { els.forEach((e) => { e.muted = muted; }); if (!xf.el) audio.volume = master; }
+function killFade() {
+  if (xf.timer) { clearInterval(xf.timer); xf.timer = null; }
+  if (xf.el) { try { xf.el.pause(); xf.el.removeAttribute('src'); xf.el.load(); } catch { /* */ } xf.el = null; }
+  audio.volume = master;
+}
 const P = {
   queue: [], idx: -1, original: null, manual: 0,
   shuffle: store.get('shuffle', false), repeat: store.get('repeat', 'off'),
@@ -131,6 +144,7 @@ function load(autoplay = true, at = 0) {
   const t = current();
   if (!t) return;
   P.counted = false;
+  killFade();
   audio.src = `/api/stream/${t.id}`;
   if (at) audio.addEventListener('loadedmetadata', () => { audio.currentTime = at; }, { once: true });
   if (autoplay) audio.play().catch(() => {});
@@ -145,17 +159,44 @@ function togglePlay() {
     if (k && lists[k]) playList(lists[k].tracks, 0, lists[k].ctx);
     return;
   }
-  audio.paused ? audio.play().catch(() => {}) : audio.pause();
+  if (audio.paused) audio.play().catch(() => {});
+  else { killFade(); audio.pause(); }
 }
 
+function peekNext() {
+  if (P.idx < P.queue.length - 1) return P.idx + 1;
+  if (P.repeat === 'all' && P.queue.length) return 0;
+  return -1;
+}
 function next(auto = false) {
   if (!P.queue.length) return;
   if (auto && P.repeat === 'one') { audio.currentTime = 0; audio.play(); return; }
+  const n = peekNext();
+  if (n < 0) { killFade(); audio.pause(); audio.currentTime = 0; return; }
   if (P.manual > 0) P.manual--;
-  if (P.idx < P.queue.length - 1) P.idx++;
-  else if (P.repeat === 'all') P.idx = 0;
-  else { audio.pause(); audio.currentTime = 0; return; }
+  P.idx = n;
   load(true);
+}
+
+// crossfade: a nova faixa passa a ser a ativa de imediato e a anterior desvanece até ao silêncio
+function startCrossfade(nextIdx, secs) {
+  killFade();
+  const out = audio, inn = els.find((e) => e !== out);
+  if (P.manual > 0) P.manual--;
+  P.idx = nextIdx; P.counted = false;
+  inn.src = `/api/stream/${current().id}`;
+  inn.muted = muted; inn.volume = 0;
+  audio = inn;
+  inn.play().catch(() => {});
+  xf.el = out;
+  const t0 = performance.now(), dur = Math.max(600, secs * 1000);
+  xf.timer = setInterval(() => {
+    const f = Math.min(1, (performance.now() - t0) / dur);
+    out.volume = master * Math.cos((f * Math.PI) / 2);   // potência constante: sem "buraco" a meio
+    inn.volume = master * Math.sin((f * Math.PI) / 2);
+    if (f >= 1) killFade();
+  }, 50);
+  updateNow(); saveState();
 }
 function prev() {
   if (audio.currentTime > 3 || P.idx === 0) { audio.currentTime = 0; return; }
@@ -196,7 +237,7 @@ function saveState() {
 }
 function restoreState() {
   const s = store.get('player', null);
-  audio.volume = store.get('volume', 0.8);
+  master = store.get('volume', 0.8); applyVolume();
   if (s && s.queue?.length && s.idx >= 0) {
     Object.assign(P, { queue: s.queue, idx: Math.min(s.idx, s.queue.length - 1), original: s.original, ctx: s.ctx });
     load(false, s.time || 0);
@@ -257,16 +298,8 @@ function markPlaying() {
   });
 }
 
-audio.addEventListener('play', markPlaying);
-audio.addEventListener('pause', () => { markPlaying(); saveState(); });
-audio.addEventListener('ended', () => next(true));
-audio.addEventListener('error', () => {
-  if (!audio.src || !current()) return;
-  toast('Não foi possível tocar esta faixa — a saltar');
-  setTimeout(() => next(), 800);
-});
 let lastSave = 0;
-audio.addEventListener('timeupdate', () => {
+function onTime() {
   const d = audio.duration || current()?.duration || 0, c = audio.currentTime;
   if (!seekDrag) setSlider($('#seek'), d ? c / d : 0), setSlider($('#nf-seek'), d ? c / d : 0);
   $('#t-cur').textContent = $('#nf-cur').textContent = fmt(c);
@@ -277,7 +310,28 @@ audio.addEventListener('timeupdate', () => {
   if ('mediaSession' in navigator && d && navigator.mediaSession.setPositionState) {
     try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(c, d), playbackRate: 1 }); } catch { /* */ }
   }
-});
+  // início do crossfade quando faltam X segundos
+  const cf = cfSeconds();
+  if (cf > 0 && !xf.el && !audio.paused && d > 2 && P.repeat !== 'one') {
+    const remaining = d - c;
+    if (remaining <= Math.min(cf, d / 2) && remaining > 0.4) {
+      const n = peekNext();
+      if (n >= 0) startCrossfade(n, remaining);
+    }
+  }
+}
+function bindAudio(el) {
+  el.addEventListener('play', () => { if (el !== audio) return; if (PV.key) { PV.resume = false; stopPreview(); } markPlaying(); });
+  el.addEventListener('pause', () => { if (el === audio) { markPlaying(); saveState(); } });
+  el.addEventListener('ended', () => { if (el === audio) next(true); });
+  el.addEventListener('error', () => {
+    if (el !== audio || !el.getAttribute('src') || !current()) return;
+    toast('Não foi possível tocar esta faixa — a saltar');
+    setTimeout(() => next(), 800);
+  });
+  el.addEventListener('timeupdate', () => { if (el === audio) onTime(); });
+}
+els.forEach(bindAudio);
 if ('mediaSession' in navigator) {
   const ms = navigator.mediaSession;
   ms.setActionHandler('play', () => audio.play());
@@ -313,10 +367,10 @@ for (const id of ['#seek', '#nf-seek']) {
     onCommit: (f) => { if (audio.duration) audio.currentTime = f * audio.duration; },
   });
 }
-makeSlider($('#vol'), { onInput: (f) => { audio.volume = f; audio.muted = false; updateVolume(); }, onCommit: () => store.set('volume', audio.volume) });
+makeSlider($('#vol'), { onInput: (f) => { master = f; muted = false; applyVolume(); updateVolume(); }, onCommit: () => store.set('volume', master) });
 function updateVolume() {
-  setSlider($('#vol'), audio.muted ? 0 : audio.volume);
-  $('#btn-vol').innerHTML = icon(audio.muted || audio.volume === 0 ? 'mute' : 'volume');
+  setSlider($('#vol'), muted ? 0 : master);
+  $('#btn-vol').innerHTML = icon(muted || master === 0 ? 'mute' : 'volume');
 }
 
 // fila
@@ -548,7 +602,7 @@ let route = { name: 'home' };
 const routes = [
   [/^\/?$/, 'home'], [/^\/search$/, 'search'], [/^\/library$/, 'library'], [/^\/album\/(\d+)$/, 'album'],
   [/^\/artist\/(\d+)$/, 'artist'], [/^\/playlist\/(\d+)$/, 'playlist'], [/^\/liked$/, 'liked'],
-  [/^\/downloads$/, 'downloads'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
+  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
 ];
 
 async function render() {
@@ -560,7 +614,7 @@ async function render() {
   $('#search-box').hidden = name !== 'search';
   highlightLib(); closeMenu();
   view.style.removeProperty('--hero'); $('#topbar').style.removeProperty('--topbar-bg');
-  clearInterval(dlTimer);
+  clearInterval(dlTimer); stopPreview();
   try {
     await VIEWS[name](arg);
   } catch (e) {
@@ -747,17 +801,28 @@ const VIEWS = {
     view.innerHTML = `<div class="view-inner">
       <h1 class="page-title">Downloads</h1>
       <div id="dl-warn"></div>
-      <form class="dl-box" id="dl-form">
-        <h2>Adicionar à biblioteca</h2>
-        <p>Cola links do Spotify (faixa, álbum, playlist ou artista) ou escreve "artista - música". Um por linha.</p>
-        <textarea id="dl-input" placeholder="https://open.spotify.com/album/…&#10;https://open.spotify.com/playlist/…&#10;Rosalía - Despechá"></textarea>
-        <div class="dl-actions"><button class="primary-btn" type="submit">${'Descarregar'}</button>
-        <span class="dl-hint">Os downloads correm um de cada vez no servidor. Podes fechar esta página.</span></div>
-      </form>
-      <div class="section-head"><h2>Atividade</h2><a href="javascript:void 0" data-action="dl-clear">Limpar concluídos</a></div>
+      <div class="dl-search">
+        <div class="search-box dl-sbox">${icon('search')}<input id="dl-q" type="search" placeholder="Pesquisar música, álbum ou artista…" autocomplete="off" value="${esc(dl.q)}"></div>
+        <div class="seg" id="dl-type">${[['track', 'Músicas'], ['album', 'Álbuns'], ['artist', 'Artistas']].map(([k, l]) => `<button class="${dl.type === k ? 'active' : ''}" data-action="dl-type" data-type="${k}">${l}</button>`).join('')}</div>
+      </div>
+      <div id="dl-results"></div>
+      <details class="dl-paste" id="dl-paste"><summary>Colar links do Spotify ou uma lista de músicas</summary>
+        <form class="dl-box" id="dl-form">
+          <p>Cola links do Spotify (faixa, álbum, playlist ou artista) ou escreve "artista - música". Um por linha.</p>
+          <textarea id="dl-input" placeholder="https://open.spotify.com/album/…&#10;https://open.spotify.com/playlist/…&#10;Rosalía - Despechá"></textarea>
+          <div class="dl-actions"><button class="primary-btn" type="submit">Descarregar</button>
+          <span class="dl-hint">Os downloads correm um de cada vez no servidor. Podes fechar esta página.</span></div>
+        </form></details>
+      <div class="section-head" style="margin-top:32px"><h2>Atividade</h2><a href="javascript:void 0" data-action="dl-clear">Limpar concluídos</a></div>
       <div id="jobs"></div></div>`;
     const pre = route.params.get('q');
-    if (pre) $('#dl-input').value = pre;
+    if (pre) {
+      if (looksLikeLink(pre)) { $('#dl-input').value = pre; $('#dl-paste').open = true; }
+      else { dl.q = pre; dl.view = null; dl.stack = []; $('#dl-q').value = pre; }
+    }
+    const qEl = $('#dl-q');
+    qEl.addEventListener('input', debounce(dlSearch, 350));
+    qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') dlSearch(); });
     $('#dl-form').onsubmit = async (e) => {
       e.preventDefault();
       const query = $('#dl-input').value.trim();
@@ -767,13 +832,233 @@ const VIEWS = {
       toast(r.ids.length > 1 ? `${r.ids.length} downloads na fila` : 'Download na fila');
       refreshJobs();
     };
+    if (dl.q.length >= 2 && (pre || !dl.items.length) && !dl.view) dlSearch(); else renderDl();
     await refreshJobs();
     dlTimer = setInterval(refreshJobs, 2000);
+  },
+
+  async settings() {
+    const [{ values: v, options: o }, sys] = await Promise.all([api('/settings'), api('/system')]);
+    S = { ...S, ...v };
+    const opt = (list, val) => list.map(([k, l]) => `<option value="${k}" ${String(k) === String(val) ? 'selected' : ''}>${l}</option>`).join('');
+    const row = (label, hint, ctl, cls = '') => `<div class="set-row ${cls}"><div class="lbl"><b>${label}</b>${hint ? `<small>${hint}</small>` : ''}</div><div class="set-ctl">${ctl}</div></div>`;
+    const lossless = ['flac', 'wav'].includes(v.dl_format);
+    const used = sys.disk ? Math.round((sys.disk.used / sys.disk.total) * 100) : 0;
+    const gb = (n) => (n / 1024 ** 3 >= 100 ? Math.round(n / 1024 ** 3) : (n / 1024 ** 3).toFixed(1)) + ' GB';
+    const structLabels = [['artist_album', 'Artista / Álbum / 01 - Título'], ['artist_flat', 'Artista / Artista - Título'], ['album', 'Álbum / 01 - Título'], ['flat', 'Artista - Título (sem pastas)'], ['custom', 'Personalizada…']];
+    const tpl = v.dl_structure === 'custom' ? v.dl_template : o.structures[v.dl_structure];
+    const example = tpl.replace('{album-artist}', 'Maré Alta').replace('{artist}', 'Maré Alta').replace('{album}', 'Atlântico')
+      .replace('{track-number}', '01').replace('{title}', 'Ondas').replace('{output-ext}', v.dl_format);
+    view.innerHTML = `<div class="view-inner"><div class="set-wrap">
+      <h1 class="page-title">Configurações</h1>
+
+      <section class="set-card"><h2>Reprodução</h2>
+        ${row('Crossfade', volumeSupported
+          ? 'Mistura o fim de uma música com o início da seguinte. Com 0 fica desligado.'
+          : 'Este dispositivo (iPhone/iPad) não deixa o browser controlar o volume, por isso o crossfade não está disponível aqui.',
+          `<input type="range" class="rng" min="0" max="12" step="1" value="${v.crossfade}" data-set="crossfade" ${volumeSupported ? '' : 'disabled'}><span class="rng-val" id="cf-val">${v.crossfade ? v.crossfade + ' s' : 'Desligado'}</span>`)}
+      </section>
+
+      <section class="set-card"><h2>Biblioteca</h2>
+        ${row('Pasta da música', 'Definida no <code>docker-compose.yml</code> (volume <code>:/music</code>). Para mudar de pasta, altera o volume e corre <code>docker compose up -d</code>.',
+          `<code class="mono path">${esc(sys.music_dir)}</code>`, 'stack')}
+        ${sys.disk ? row('Espaço no disco', `${gb(sys.disk.free)} livres de ${gb(sys.disk.total)}`, `<div class="disk"><div style="width:${used}%"></div></div><span class="rng-val">${used}%</span>`) : ''}
+        ${row('Na biblioteca', `${plural(sys.library.tracks, 'música', 'músicas')} · ${plural(sys.library.albums, 'álbum', 'álbuns')} · ${plural(sys.library.artists, 'artista', 'artistas')}`,
+          `<button class="ghost-btn" data-action="set-rescan">Atualizar agora</button><button class="ghost-btn" data-action="set-rescan-full" title="Volta a ler as etiquetas de todos os ficheiros">Leitura completa</button>`)}
+        ${row('Verificar a pasta automaticamente', 'Apanha ficheiros que copies à mão para a pasta de música.',
+          `<select class="sel" data-set="auto_scan_min">${opt([[0, 'Nunca'], [15, 'A cada 15 minutos'], [60, 'A cada hora'], [360, 'A cada 6 horas'], [1440, 'Uma vez por dia']], v.auto_scan_min)}</select>`)}
+      </section>
+
+      <section class="set-card"><h2>Downloads</h2>
+        ${row('Subpasta de destino', `Dentro da pasta da música. Deixa vazio para guardar na raiz.<br>Os downloads vão para <code class="mono">${esc(sys.download_dir)}</code>`,
+          `<input class="txt" data-set="dl_subfolder" value="${esc(v.dl_subfolder)}" placeholder="(raiz)" maxlength="120" spellcheck="false">`)}
+        ${row('Estrutura das pastas', `Exemplo: <code class="mono">${esc(example)}</code>`,
+          `<select class="sel" data-set="dl_structure">${opt(structLabels, v.dl_structure)}</select>`)}
+        ${v.dl_structure === 'custom' ? row('Modelo personalizado', 'Variáveis do spotDL: <code>{artist}</code> <code>{album-artist}</code> <code>{album}</code> <code>{title}</code> <code>{track-number}</code> <code>{year}</code>. Tem de acabar em <code>{output-ext}</code>.',
+          `<input class="txt wide" data-set="dl_template" value="${esc(v.dl_template)}" spellcheck="false">`, 'stack') : ''}
+        ${row('Formato', 'MP3 funciona em todo o lado. FLAC não perde qualidade, mas ocupa 5 a 10 vezes mais.',
+          `<select class="sel" data-set="dl_format">${opt([['mp3', 'MP3'], ['m4a', 'M4A (AAC)'], ['opus', 'Opus'], ['ogg', 'OGG'], ['flac', 'FLAC (sem perdas)'], ['wav', 'WAV']], v.dl_format)}</select>`)}
+        ${lossless ? '' : row('Qualidade', 'Em "Automática" o spotDL escolhe a melhor disponível. As faixas vêm do YouTube, por isso acima de 256k quase não há ganho.',
+          `<select class="sel" data-set="dl_bitrate">${opt([['auto', 'Automática'], ['128k', '128 kbps'], ['192k', '192 kbps'], ['256k', '256 kbps'], ['320k', '320 kbps']], v.dl_bitrate)}</select>`)}
+        ${row('Downloads em simultâneo', 'Faixas descarregadas ao mesmo tempo dentro de cada pedido. Num servidor com 2 GB de RAM, 1 ou 2 é o mais seguro.',
+          `<select class="sel" data-set="dl_threads">${opt([[1, '1'], [2, '2'], [3, '3'], [4, '4']], v.dl_threads)}</select>`)}
+      </section>
+
+      <section class="set-card"><h2>Sistema</h2>
+        ${row('Versões', 'O spotDL e o yt-dlp são o que descarrega a música.', `<span class="dl-hint" id="ver-box">A verificar…</span>`)}
+        ${row('Atualizar o yt-dlp', 'Resolve a maioria das falhas de download (o YouTube muda muitas vezes). Também corre sempre que o container arranca.',
+          `<button class="ghost-btn" data-action="set-ytdlp" id="btn-ytdlp">Atualizar agora</button>`)}
+        ${sys.auth_enabled ? row('Sessão', 'Termina a sessão neste dispositivo.', `<button class="ghost-btn" data-action="logout">Terminar sessão</button>`) : ''}
+      </section>
+    </div></div>`;
+    api('/system/versions').then((vv) => {
+      const b = $('#ver-box'); if (b) b.textContent = `spotDL ${vv.spotdl || '—'} · yt-dlp ${vv.ytdlp || '—'}`;
+    }).catch(() => { const b = $('#ver-box'); if (b) b.textContent = 'indisponível'; });
   },
 };
 function playlistCardLiked(n) {
   return card({ href: '#/liked', artHtml: likedArt(), title: 'Músicas de que gostas', sub: `Playlist • ${plural(n, 'música', 'músicas')}`, playCtx: 'liked' });
 }
+
+// ------------------------------------------------------------------ Downloads: pesquisa + prévia
+const dl = { q: '', type: 'track', items: [], view: null, stack: [], seq: 0, error: '', loading: false, tracks: [], albums: [], queued: new Set() };
+const looksLikeLink = (q) => /^(https?:\/\/|spotify:)/i.test(String(q).trim());
+const dlImg = (src, cls = '') => (src ? `<img src="${esc(src)}" class="${cls}" loading="lazy" alt="" referrerpolicy="no-referrer">` : `<div class="ph ${cls}">${icon('note')}</div>`);
+const dlSkeleton = (n = 6) => `<div class="dl-list">${Array.from({ length: n }, () => '<div class="dl-row"><div class="skel" style="width:48px;height:48px"></div><div class="meta"><div class="skel" style="height:14px;width:40%;margin-bottom:8px"></div><div class="skel" style="height:12px;width:25%"></div></div></div>').join('')}</div>`;
+
+const pv = new Audio(); pv.preload = 'none';
+const PV = { key: null, resume: false };
+function markPreview() {
+  $$('.dl-row').forEach((r) => {
+    const on = !!PV.key && r.dataset.key === PV.key;
+    r.classList.toggle('pv-on', on);
+    const ico = $('.pv-ico', r); if (ico) ico.innerHTML = icon(on ? 'pause' : 'play');
+    if (!on) { const b = $('.pv-bar div', r); if (b) b.style.width = '0'; }
+  });
+}
+function stopPreview() {
+  if (!PV.key) return;
+  PV.key = null;
+  pv.pause(); pv.removeAttribute('src'); pv.load();
+  markPreview();
+  if (PV.resume) { PV.resume = false; audio.play().catch(() => {}); }
+}
+function togglePreview(t) {
+  if (!t || !t.preview) return toast('Esta faixa não tem pré-visualização');
+  const key = 't' + t.id;
+  if (PV.key === key) return stopPreview();
+  const keep = PV.resume;
+  PV.resume = false; stopPreview();                // para a anterior sem retomar a música principal
+  PV.resume = keep || !audio.paused;               // se a música principal tocava, retoma no fim
+  if (!audio.paused) { killFade(); audio.pause(); }
+  PV.key = key;
+  pv.src = t.preview; pv.volume = muted ? 0 : master;
+  pv.play().catch(() => { toast('Não foi possível reproduzir a pré-visualização'); stopPreview(); });
+  markPreview();
+}
+pv.addEventListener('ended', stopPreview);
+pv.addEventListener('timeupdate', () => {
+  const f = pv.duration ? pv.currentTime / pv.duration : 0;
+  $$('.dl-row.pv-on .pv-bar div').forEach((d) => { d.style.width = f * 100 + '%'; });
+});
+
+async function dlSearch() {
+  const input = $('#dl-q'); if (!input) return;
+  const q = input.value.trim();
+  if (looksLikeLink(q)) {   // um link é para a caixa "Colar links"
+    $('#dl-input').value = q; $('#dl-paste').open = true; input.value = ''; dl.q = ''; dl.items = []; dl.view = null; dl.stack = [];
+    return renderDl();
+  }
+  stopPreview();
+  dl.q = q; dl.view = null; dl.stack = []; dl.error = '';
+  if (q.length < 2) { dl.items = []; dl.loading = false; dl.seq++; return renderDl(); }
+  const my = ++dl.seq;
+  dl.loading = true; renderDl();
+  try {
+    const r = await api(`/discover/search?q=${encodeURIComponent(q)}&type=${dl.type}`);
+    if (my !== dl.seq) return;
+    dl.items = r.items;
+  } catch (e) {
+    if (my !== dl.seq) return;
+    dl.items = []; dl.error = e.message;
+  }
+  dl.loading = false;
+  renderDl();
+}
+
+function dlRow(t, i) {
+  const key = 't' + t.id;
+  const state = t.in_library
+    ? `<span class="dl-state ok" title="Já está na biblioteca">${icon('check')}<span>Na biblioteca</span></span>`
+    : dl.queued.has(key)
+      ? `<span class="dl-state">${icon('check')}<span>Na fila</span></span>`
+      : `<button class="dl-btn" data-action="dl-track" data-i="${i}">${icon('download')}<span>Descarregar</span></button>`;
+  return `<div class="dl-row" data-key="${key}">
+    <button class="pv-btn" data-action="pv" data-i="${i}" ${t.preview ? '' : 'disabled'} aria-label="Pré-ouvir ${esc(t.title)}">${dlImg(t.cover)}<span class="pv-ico">${icon('play')}</span></button>
+    <div class="meta"><div class="t">${esc(t.title)}${t.explicit ? ' <span class="tag-e" title="Conteúdo explícito">E</span>' : ''}</div>
+      <div class="s">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div></div>
+    <span class="dur">${fmt(t.duration)}</span>${state}<div class="pv-bar"><div></div></div></div>`;
+}
+const dlAlbumCard = (a, i) => `<div class="card dl-card" data-action="dl-open" data-kind="album" data-id="${a.id}">
+  <div class="art">${dlImg(a.cover)}</div><div class="t">${esc(a.title)}</div>
+  <div class="s">${esc(a.artist)}${a.year ? ' · ' + esc(a.year) : ''}${a.kind === 'single' ? ' · Single' : a.kind === 'ep' ? ' · EP' : ''}</div>
+  <button class="dl-btn sm" data-action="dl-album-card" data-i="${i}">${icon('download')}<span>Descarregar</span></button></div>`;
+const dlArtistCard = (a) => `<div class="card dl-card" data-action="dl-open" data-kind="artist" data-id="${a.id}">
+  <div class="art">${dlImg(a.picture, 'round')}</div><div class="t">${esc(a.name)}</div><div class="s">Artista${a.fans ? ' · ' + a.fans.toLocaleString('pt-PT') + ' fãs' : ''}</div></div>`;
+
+function renderDl() {
+  const box = $('#dl-results'); if (!box) return;
+  if (dl.view) return renderDlDetail(box);
+  if (dl.loading) box.innerHTML = dl.type === 'track' ? dlSkeleton() : '<div class="grid dl-grid">' + Array.from({ length: 8 }, () => '<div class="card"><div class="skel" style="aspect-ratio:1"></div></div>').join('') + '</div>';
+  else if (dl.error) box.innerHTML = `<div class="warn">${esc(dl.error)}</div>`;
+  else if (dl.q.length < 2) box.innerHTML = '<p class="dl-intro">Escreve o nome de uma música, álbum ou artista. Cada resultado tem uma pré-visualização de 30 segundos antes de descarregares.</p>';
+  else if (!dl.items.length) box.innerHTML = `<div class="empty"><h3>Nada encontrado para "${esc(dl.q)}"</h3><p>Tenta só o nome do artista, ou cola um link do Spotify mais abaixo.</p></div>`;
+  else if (dl.type === 'track') { dl.tracks = dl.items; box.innerHTML = `<div class="dl-list">${dl.items.map(dlRow).join('')}</div>`; }
+  else if (dl.type === 'album') { dl.albums = dl.items; box.innerHTML = `<div class="grid dl-grid">${dl.items.map(dlAlbumCard).join('')}</div>`; }
+  else box.innerHTML = `<div class="grid dl-grid">${dl.items.map(dlArtistCard).join('')}</div>`;
+  markPreview();
+}
+function renderDlDetail(box) {
+  const v = dl.view;
+  const back = '<button class="ghost-btn dl-back" data-action="dl-back">← Voltar</button>';
+  if (v.loading) { box.innerHTML = back + dlSkeleton(5); return; }
+  const d = v.data;
+  if (v.kind === 'album') {
+    dl.tracks = d.tracks_list;
+    const missing = d.tracks_list.filter((t) => !t.in_library && !dl.queued.has('t' + t.id)).length;
+    box.innerHTML = `${back}<div class="dl-head">${dlImg(d.cover, 'dl-cover')}<div class="info">
+      <div class="kind">${d.kind === 'single' ? 'Single' : d.kind === 'ep' ? 'EP' : 'Álbum'}</div><h2>${esc(d.title)}</h2>
+      <div class="s">${esc(d.artist)}${d.year ? ' · ' + esc(d.year) : ''} · ${plural(d.tracks_list.length, 'faixa', 'faixas')}</div>
+      ${missing ? `<button class="primary-btn" data-action="dl-all">${icon('download')} Descarregar ${missing === d.tracks_list.length ? 'o álbum' : plural(missing, 'faixa em falta', 'faixas em falta')}</button>`
+        : '<span class="dl-state ok">' + icon('check') + '<span>Já tens tudo</span></span>'}</div></div>
+      <div class="dl-list">${d.tracks_list.map(dlRow).join('')}</div>`;
+  } else {
+    dl.tracks = d.top; dl.albums = d.albums;
+    const missing = d.top.filter((t) => !t.in_library && !dl.queued.has('t' + t.id)).length;
+    box.innerHTML = `${back}<div class="dl-head">${dlImg(d.picture, 'dl-cover round')}<div class="info"><div class="kind">Artista</div><h2>${esc(d.name)}</h2>
+      ${d.fans ? `<div class="s">${d.fans.toLocaleString('pt-PT')} fãs</div>` : ''}</div></div>
+      <div class="section-head"><h2>Populares</h2>${missing ? `<button class="ghost-btn" data-action="dl-all">${icon('download')} Descarregar ${missing === 1 ? 'a faixa em falta' : `as ${missing} em falta`}</button>` : ''}</div>
+      <div class="dl-list">${d.top.map(dlRow).join('')}</div>
+      ${d.albums.length ? `<div class="section-head" style="margin-top:32px"><h2>Álbuns e singles</h2></div><div class="grid dl-grid">${d.albums.map(dlAlbumCard).join('')}</div>` : ''}`;
+  }
+  markPreview();
+}
+async function dlOpen(kind, id) {
+  stopPreview();
+  if (dl.view && !dl.view.loading) dl.stack.push(dl.view);
+  dl.view = { kind, id, loading: true }; renderDl();
+  $('#view').scrollTop = 0;
+  try { dl.view = { kind, id, data: await api(`/discover/${kind}/${id}`) }; }
+  catch (e) { dl.view = dl.stack.pop() || null; dl.error = e.message; toast(e.message); }
+  renderDl();
+}
+async function dlQueue(tracks, label) {
+  const todo = tracks.filter((t) => !t.in_library && !dl.queued.has('t' + t.id));
+  if (!todo.length) return toast('Já tens estas músicas na biblioteca');
+  await api('/downloads', { json: { queries: todo.map((t) => `${t.artist} - ${t.title}`), label } });
+  todo.forEach((t) => dl.queued.add('t' + t.id));
+  toast(todo.length === 1 ? 'Download na fila' : `${todo.length} músicas na fila`);
+  renderDl(); refreshJobs();
+}
+
+// ------------------------------------------------------------------ Configurações
+async function saveSetting(key, val) {
+  try {
+    const r = await api('/settings', { method: 'PUT', json: { [key]: val } });
+    S = { ...S, ...r.values }; toast('Guardado');
+  } catch (err) { if (err.message !== 'auth') toast(err.message); }
+  if (route.name === 'settings') { const y = view.scrollTop; await VIEWS.settings(); view.scrollTop = y; }
+}
+view.addEventListener('input', (e) => {
+  const el = e.target.closest('input[data-set="crossfade"]');
+  if (el) $('#cf-val').textContent = +el.value ? el.value + ' s' : 'Desligado';
+});
+view.addEventListener('change', (e) => {
+  const el = e.target.closest('[data-set]'); if (!el) return;
+  const key = el.dataset.set;
+  const val = el.type === 'range' || ['dl_threads', 'auto_scan_min'].includes(key) ? +el.value : el.value;
+  saveSetting(key, val);
+});
 
 // pesquisa
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
@@ -841,7 +1126,8 @@ async function refreshJobs() {
   box.innerHTML = d.jobs.map((j) => {
     const pct = j.total ? Math.round(((j.done + j.failed) / j.total) * 100) : 0;
     const active = j.status === 'running' || j.status === 'queued';
-    const label = j.query.replace(/^https?:\/\/open\.spotify\.com\/(intl-\w+\/)?/, 'spotify/').replace(/\?.*$/, '');
+    const nq = j.query.split('\n').length;
+    const label = j.label || (nq > 1 ? `${nq} músicas` : j.query.replace(/^https?:\/\/open\.spotify\.com\/(intl-\w+\/)?/, 'spotify/').replace(/\?.*$/, ''));
     return `<div class="job"><div class="job-top"><div class="job-q" title="${esc(j.query)}">${esc(label)}</div>
       <span class="job-st ${j.status}">${ST[j.status] || j.status}</span>
       <button class="icon-btn" data-action="dl-cancel" data-id="${j.id}" title="${active ? 'Cancelar' : 'Remover'}">${icon(active ? 'close' : 'trash')}</button></div>
@@ -893,7 +1179,7 @@ document.addEventListener('click', async (e) => {
       case 'prev': prev(); break;
       case 'shuffle': toggleShuffle(); $$('[data-action="shuffle-ctx"]').forEach((b) => b.classList.toggle('on', P.shuffle)); break;
       case 'repeat': cycleRepeat(); break;
-      case 'mute': audio.muted = !audio.muted; updateVolume(); break;
+      case 'mute': muted = !muted; applyVolume(); updateVolume(); break;
       case 'like-current': if (current()) setLike(current(), !current().liked); break;
       case 'toggle-queue': {
         if (isMobile()) { openQueueSheet(); break; }
@@ -938,6 +1224,31 @@ document.addEventListener('click', async (e) => {
       case 'download-more': location.hash = `#/downloads?q=${encodeURIComponent(a.dataset.q)}`; break;
       case 'dl-cancel': await api(`/downloads/${a.dataset.id}`, { method: 'DELETE' }); refreshJobs(); break;
       case 'dl-clear': await api('/downloads/clear', { json: {} }); refreshJobs(); break;
+      case 'dl-type': dl.type = a.dataset.type; $$('#dl-type button').forEach((b) => b.classList.toggle('active', b === a)); dlSearch(); break;
+      case 'dl-open': dlOpen(a.dataset.kind, a.dataset.id); break;
+      case 'dl-back': stopPreview(); dl.view = dl.stack.pop() || null; renderDl(); break;
+      case 'pv': togglePreview(dl.tracks[+a.dataset.i]); break;
+      case 'dl-track': { const t = dl.tracks[+a.dataset.i]; dlQueue([t], `${t.title} — ${t.artist}`).catch((err) => toast(err.message)); break; }
+      case 'dl-album-card': {
+        const al = dl.albums[+a.dataset.i]; toast('A obter as faixas…');
+        api(`/discover/album/${al.id}`).then((d) => dlQueue(d.tracks_list, `${al.title} — ${al.artist}`)).catch((err) => toast(err.message)); break;
+      }
+      case 'dl-all': {
+        const v = dl.view; if (!v || !v.data) break;
+        dlQueue(dl.tracks, v.kind === 'album' ? `${v.data.title} — ${v.data.artist}` : `Populares — ${v.data.name}`).catch((err) => toast(err.message)); break;
+      }
+      case 'set-rescan': case 'set-rescan-full':
+        await api(`/scan${act === 'set-rescan-full' ? '?full=true' : ''}`, { json: {} }); toast('A atualizar a biblioteca…'); pollScan(); break;
+      case 'set-ytdlp': {
+        a.disabled = true; a.textContent = 'A atualizar…';
+        try {
+          const r = await api('/system/update-ytdlp', { json: {} });
+          toast(r.ok ? `yt-dlp atualizado (${r.ytdlp || 'ok'})` : 'A atualização falhou — vê os registos do container');
+          const b = $('#ver-box'); if (b) b.textContent = `spotDL ${r.spotdl || '—'} · yt-dlp ${r.ytdlp || '—'}`;
+        } catch (err) { toast(err.message); }
+        a.disabled = false; a.textContent = 'Atualizar agora'; break;
+      }
+      case 'logout': await api('/logout', { json: {} }); location.reload(); break;
     }
     return;
   }
@@ -1001,6 +1312,7 @@ $('#login-form').onsubmit = async (e) => {
 async function boot() {
   const me = await fetch('/api/me').then((r) => r.json());
   if (me.auth_enabled && !me.authed) { showLogin(); return; }
+  try { S = { ...S, ...(await api('/settings')).values }; } catch { /* */ }
   restoreState();
   loadLibrary();
   render();
