@@ -1,0 +1,18 @@
+services:
+  npeh-music:
+    build: .
+    image: npeh-music:latest
+    container_name: npeh-music
+    restart: unless-stopped
+    ports:
+      - "8800:8800"
+    env_file: .env
+    volumes:
+      # pasta de música EXISTENTE (a mesma que o Downtify/Swing usavam)
+      - /mnt/dietpi_userdata/music:/music
+      # base de dados, capas e chave de sessão
+      - ./data:/data
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
