@@ -551,3 +551,107 @@ code.path { font-size: 13px; padding: 8px 12px; word-break: break-all; }
   #btn-lyrics { display: none; }
 }
 @media (min-width: 761px) and (max-height: 700px) { .nf-media { width: min(40vh, 360px); } }
+
+/* =====================================================================
+   Vida: glow profundo e subtil + animações (respeita "reduzir movimento")
+   ===================================================================== */
+:root { --glow: color-mix(in srgb, var(--np-bg, #1db954) 65%, transparent); --glow-soft: color-mix(in srgb, var(--np-bg, #1db954) 28%, transparent); }
+
+/* luz ambiente atrás do conteúdo, na cor da música que está a tocar */
+.main::before { content: ""; position: absolute; inset: -20% -10% auto -10%; height: 70%; z-index: 0; pointer-events: none;
+  background: radial-gradient(60% 55% at 70% 0%, var(--glow-soft), transparent 70%), radial-gradient(40% 40% at 10% 10%, #1ed76012, transparent 70%);
+  opacity: .9; transition: background 1.2s ease; }
+.view { position: relative; z-index: 1; }
+body.is-playing .main::before { animation: ambient 14s ease-in-out infinite alternate; }
+@keyframes ambient { from { transform: translate3d(0, 0, 0) scale(1); opacity: .75; } to { transform: translate3d(-4%, 3%, 0) scale(1.08); opacity: 1; } }
+
+/* logótipo */
+.logo { filter: drop-shadow(0 0 10px #1ed76055); transition: filter .4s; }
+.brand:hover .logo { filter: drop-shadow(0 0 16px #1ed760aa); }
+body.is-playing .nav .logo { animation: logo-beat 2.4s ease-in-out infinite; }
+@keyframes logo-beat { 0%, 100% { filter: drop-shadow(0 0 8px #1ed76044); } 50% { filter: drop-shadow(0 0 18px #1ed76099); } }
+
+/* capas e cartões */
+.hero .hero-cover { box-shadow: 0 8px 40px #00000099, 0 0 90px color-mix(in srgb, var(--hero, #535353) 55%, transparent); }
+.card { transition: background .25s, transform .25s cubic-bezier(.2, .7, .2, 1); }
+.card:hover { transform: translateY(-3px); }
+.card .art > img, .card .art > .mosaic, .card .art > .liked-cover { transition: box-shadow .3s; }
+.card:hover .art > img, .card:hover .art > .mosaic, .card:hover .art > .liked-cover { box-shadow: 0 14px 34px #000000a0, 0 0 28px #ffffff14; }
+.shortcut { transition: background .2s, box-shadow .3s; }
+.shortcut:hover { box-shadow: 0 0 26px #ffffff10; }
+.lib-item.playing .cover-sm, .lib-item.playing .mosaic, .lib-item.playing .liked-cover { box-shadow: 0 0 16px var(--glow); }
+
+/* botões verdes */
+.play-big, .card .fab, .shortcut .fab, .top-result .fab, .primary-btn { box-shadow: 0 6px 22px #1ed76033; }
+.play-big:hover, .fab:hover, .primary-btn:hover { box-shadow: 0 6px 30px #1ed76066; }
+.play-big.on { animation: breathe 2.6s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { box-shadow: 0 0 0 0 #1ed76055, 0 6px 22px #1ed76033; } 50% { box-shadow: 0 0 0 10px #1ed76000, 0 6px 34px #1ed76077; } }
+.icon-btn:active, .play-btn:active, .primary-btn:active, .ghost-btn:active, .chip:active, .dl-btn:active { transform: scale(.93); }
+
+/* faixa a tocar */
+.tr.playing { background: linear-gradient(90deg, #1ed7600f, transparent 60%); }
+.tr.playing.is-playing .tt { text-shadow: 0 0 18px #1ed76066; }
+.eq b { box-shadow: 0 0 6px #1ed760aa; }
+
+/* barra do player */
+.player::before { content: ""; position: absolute; left: 8%; right: 8%; top: -1px; height: 1px; opacity: 0; transition: opacity .8s;
+  background: linear-gradient(90deg, transparent, var(--glow), transparent); box-shadow: 0 0 18px 2px var(--glow-soft); }
+body.is-playing .player::before { opacity: 1; }
+#np-cover { transition: box-shadow .8s; }
+body.is-playing #np-cover { box-shadow: 0 0 22px var(--glow-soft); }
+body.is-playing .controls .play-btn { box-shadow: 0 0 18px #ffffff40; }
+.slider:hover .fill, .slider.drag .fill { box-shadow: 0 0 10px #1ed760aa; }
+
+/* Agora a tocar */
+.nf-media { box-shadow: 0 18px 60px #000000b0, 0 0 120px var(--glow-soft); }
+.ly-line.active { text-shadow: 0 0 28px #ffffff55; }
+.now-full .play-btn.huge { box-shadow: 0 0 30px #ffffff33; }
+
+/* gosto */
+.like-btn.pop { animation: pop .45s cubic-bezier(.2, 1.6, .4, 1); }
+@keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(1.35); filter: drop-shadow(0 0 8px #1ed760); } 100% { transform: scale(1); } }
+
+/* entrada das páginas e dos cartões (escalonada) */
+@keyframes view-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+.view > div { animation: view-in .4s cubic-bezier(.2, .7, .2, 1) both; }
+.grid .card, .shortcuts .shortcut, .browse a, .set-card { animation: rise .5s cubic-bezier(.2, .7, .2, 1) both; }
+.grid .card:nth-child(2), .shortcuts .shortcut:nth-child(2), .set-card:nth-of-type(2) { animation-delay: .03s; }
+.grid .card:nth-child(3), .shortcuts .shortcut:nth-child(3), .set-card:nth-of-type(3) { animation-delay: .06s; }
+.grid .card:nth-child(4), .shortcuts .shortcut:nth-child(4), .set-card:nth-of-type(4) { animation-delay: .09s; }
+.grid .card:nth-child(5), .shortcuts .shortcut:nth-child(5), .set-card:nth-of-type(5) { animation-delay: .12s; }
+.grid .card:nth-child(6), .shortcuts .shortcut:nth-child(6), .set-card:nth-of-type(6) { animation-delay: .15s; }
+.grid .card:nth-child(7), .shortcuts .shortcut:nth-child(7), .set-card:nth-of-type(7) { animation-delay: .18s; }
+.grid .card:nth-child(n+8), .shortcuts .shortcut:nth-child(n+8), .set-card:nth-of-type(n+8) { animation-delay: .21s; }
+.toast:not([hidden]) { animation: toast-in .3s cubic-bezier(.2, 1.2, .4, 1); }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0); } }
+.ctx-menu:not([hidden]) { animation: menu-in .16s ease-out; transform-origin: top; }
+@keyframes menu-in { from { opacity: 0; transform: scale(.97) translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* playlists sincronizadas */
+.sync-ic { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: var(--green); }
+.sync-ic .i { width: 13px; height: 13px; }
+.sync-badge { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 6px 12px; border-radius: 99px; font-size: 13px; font-weight: 600;
+  background: #00000059; color: #ffffffe0; backdrop-filter: blur(6px); max-width: 100%; }
+.sync-badge .i { width: 16px; height: 16px; color: var(--green); flex: none; }
+.sync-badge span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-badge.busy .i { animation: spin 1.2s linear infinite; }
+.sync-badge.err .i { color: #f15e6c; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* vídeo curto: vertical no computador, ecrã inteiro no telemóvel (como o Spotify) */
+.nf-media.has-canvas { aspect-ratio: 9 / 16; width: min(36vh, 340px); }
+.nf-media video { animation: fade-in .6s ease both; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 760px) {
+  .now-full.canvas-full:not(.lyrics-on) .nf-stage { position: static; }
+  .now-full.canvas-full:not(.lyrics-on) .nf-media { position: absolute; inset: 0; width: auto; aspect-ratio: auto; border-radius: 0; box-shadow: none; z-index: 0; }
+  .now-full.canvas-full:not(.lyrics-on)::after { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background: linear-gradient(#000000a0, transparent 22%, transparent 48%, #000000d9 82%); }
+  .now-full.canvas-full:not(.lyrics-on) .nf-bg { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+.view.quiet > div, .view.quiet .card, .view.quiet .shortcut, .view.quiet .set-card, .view.quiet .browse a { animation: none; }

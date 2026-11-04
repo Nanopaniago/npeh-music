@@ -27,6 +27,8 @@ RE_DONE = re.compile(r'^\s*(Downloaded|Skipping)\b', re.I)
 RE_FAIL = re.compile(r"(LookupError|AudioProviderError|DownloaderError|No results found|Failed to download)", re.I)
 RE_URL = re.compile(r"(open\.spotify\.com|^spotify:|youtu)", re.I)
 MAX_LOG = 20000
+AFTER_JOB = []   # funções chamadas depois de cada download (ex.: ligar faixas às playlists sincronizadas)
+RE_SPOTIFY_TRACK = re.compile(r"^https://open\.spotify\.com/track/[A-Za-z0-9]+$")
 
 
 def spotdl_available():
@@ -118,13 +120,14 @@ def enqueue_items(items, label: str | None = None):
             skipped.append({"title": title, "artist": artist, "reason": REASONS[st], "why": st})
             continue
         seen.add(key)
-        todo.append((key, artist, title, dur))
+        q = str(it.get("query") or "")
+        todo.append((key, artist, title, dur, q if RE_SPOTIFY_TRACK.match(q) else f"{artist} - {title}"))
     if not todo:
         return None, 0, skipped
-    jid = _insert_job("\n".join(f"{a} - {t}" for _, a, t, _ in todo), label)
+    jid = _insert_job("\n".join(q for *_, q in todo), label)
     conn = get_conn()
     conn.executemany("INSERT INTO dl_items(job_id, key, artist, title, duration) VALUES (?,?,?,?,?)",
-                     [(jid, k, a, t, d) for k, a, t, d in todo])
+                     [(jid, k, a, t, d) for k, a, t, d, _ in todo])
     conn.commit()
     _put(jid)
     return jid, len(todo), skipped
@@ -176,7 +179,7 @@ async def _run_job(job_id: int):
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     _current.update(job_id=job_id, proc=proc)
-    multi_search = len(queries) > 1 and not any(RE_URL.search(q) for q in queries)
+    multi_search = len(queries) > 1
     total = len(queries) if multi_search else 0
     if total:
         _update(job_id, total=total)
@@ -208,6 +211,11 @@ async def _run_job(job_id: int):
     # incorpora as faixas novas na biblioteca, fecha os registos e procura letras em falta
     await asyncio.to_thread(scanner.scan)
     _finalize_items(job_id, status)
+    for fn in AFTER_JOB:
+        try:
+            await asyncio.to_thread(fn, job_id)
+        except Exception:  # noqa
+            log.exception("hook pós-download falhou")
     asyncio.get_running_loop().run_in_executor(None, lyrics.prefetch, 60)
 
 

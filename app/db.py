@@ -79,6 +79,36 @@ CREATE TABLE IF NOT EXISTS lyrics (
     source TEXT,
     fetched_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pl_sources (
+    id INTEGER PRIMARY KEY,
+    playlist_id INTEGER NOT NULL UNIQUE REFERENCES playlists(id) ON DELETE CASCADE,
+    url TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    name TEXT,
+    cover TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    total INTEGER NOT NULL DEFAULT 0,
+    matched INTEGER NOT NULL DEFAULT 0,
+    last_sync INTEGER,
+    last_status TEXT,
+    last_error TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE TABLE IF NOT EXISTS pl_source_items (
+    source_id INTEGER NOT NULL REFERENCES pl_sources(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    title TEXT,
+    artist TEXT,
+    duration REAL,
+    query TEXT,
+    PRIMARY KEY (source_id, position)
+);
+CREATE TABLE IF NOT EXISTS canvas (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    tried_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

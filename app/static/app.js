@@ -298,6 +298,7 @@ function updateLikeButtons() {
 function markPlaying() {
   const t = uiTrack(), playing = isPlayingNow();
   nowEl.classList.toggle('is-playing', playing);
+  document.body.classList.toggle('is-playing', playing);
   const cv = $('#nf-canvas'); if (!cv.hidden && nowOpen()) { if (playing) cv.play().catch(() => {}); else cv.pause(); }
   $$('.tr[data-id]').forEach((r) => {
     const on = t && +r.dataset.id === t.id;
@@ -423,6 +424,7 @@ async function setLike(track, on) {
   track.liked = on;
   $$(`.tr[data-id="${track.id}"] .like-btn`).forEach((b) => { b.classList.toggle('on', on); b.innerHTML = icon(on ? 'heart-fill' : 'heart'); });
   updateLikeButtons();
+  if (on) $$(`.tr[data-id="${track.id}"] .like-btn, #np-like, #nf-like`).forEach((b) => { b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); });
   toast(on ? 'Adicionada a Músicas de que gostas' : 'Removida de Músicas de que gostas');
   if (route.name === 'liked') render();
   loadLibrary();
@@ -459,7 +461,7 @@ function card({ href, artHtml, title, sub, playCtx, round = false }) {
 }
 const albumCard = (a) => card({ href: `#/album/${a.id}`, artHtml: art(a.id, a.has_cover), title: a.title, sub: `${esc(a.year || '')}${a.year ? ' • ' : ''}${esc(a.artist)}`, playCtx: `album:${a.id}` });
 const artistCard = (a) => card({ href: `#/artist/${a.id}`, artHtml: artistArt(a), title: a.name, sub: 'Artista', playCtx: `artist:${a.id}`, round: true });
-const playlistCard = (p) => card({ href: `#/playlist/${p.id}`, artHtml: playlistArt(p), title: p.name, sub: `Playlist • ${plural(p.track_count, 'música', 'músicas')}`, playCtx: `playlist:${p.id}` });
+const playlistCard = (p) => card({ href: `#/playlist/${p.id}`, artHtml: playlistArt(p), title: p.name, sub: `${p.synced ? `<span class="sync-ic" title="Sincronizada">${icon('refresh')}</span>` : ''}Playlist • ${plural(p.track_count, 'música', 'músicas')}`, playCtx: `playlist:${p.id}` });
 const trackCard = (t, key, i) => `<div class="card" data-action="play-from" data-list="${key}" data-i="${i}">
     <div class="art">${art(t.album_id, t.has_cover)}<button class="fab" data-action="play-from" data-list="${key}" data-i="${i}">${icon('play')}</button></div>
     <div class="t">${esc(t.title)}</div><div class="s">${esc(t.artist)}</div></div>`;
@@ -550,6 +552,14 @@ async function handleMenu(action, btn) {
     toast(`Adicionada a ${name}`); loadLibrary();
   }
   if (action === 'pl-edit') editPlaylist(c.playlist);
+  if (action === 'pl-create') newPlaylist();
+  if (action === 'pl-import') { const u = await promptModal('Importar playlist', '', 'Link de uma playlist do Spotify ou do Deezer'); if (u) importPlaylist(u); }
+  if (action === 'pl-sync') { await api(`/playlists/${c.playlist.id}/sync`, { json: {} }); toast('A verificar a playlist original…'); refreshView(); }
+  if (action === 'pl-src-toggle') { await api(`/playlists/${c.playlist.id}/source`, { method: 'PATCH', json: { enabled: !c.playlist.source.enabled } }); toast(c.playlist.source.enabled ? 'Sincronização pausada' : 'Sincronização retomada'); refreshView(); }
+  if (action === 'pl-unlink') {
+    if (!(await confirmModal('Deixar de sincronizar?', 'A playlist fica como está e passa a ser uma playlist normal. Novas músicas da original deixam de entrar.'))) return;
+    await api(`/playlists/${c.playlist.id}/source`, { method: 'DELETE' }); toast('Já não está sincronizada'); refreshView(); loadLibrary();
+  }
   if (action === 'pl-delete') {
     if (!(await confirmModal(`Apagar "${c.playlist.name}"?`, 'A playlist é apagada da biblioteca. As músicas continuam no servidor.'))) return;
     await api(`/playlists/${c.playlist.id}`, { method: 'DELETE' }); toast('Playlist apagada'); loadLibrary(); location.hash = '#/library';
@@ -609,7 +619,7 @@ async function loadLibrary() {
     if (libFilter === 'playlists') {
       const [pls, liked] = await Promise.all([api('/playlists'), api('/liked')]);
       html += `<a class="lib-item" href="#/liked" data-ctx="liked">${likedArt('cover-sm')}<div class="meta"><div class="t">Músicas de que gostas</div><div class="s">Playlist • ${plural(liked.length, 'música', 'músicas')}</div></div></a>`;
-      html += pls.map((p) => `<a class="lib-item" href="#/playlist/${p.id}" data-ctx="playlist:${p.id}">${playlistArt(p, 'cover-sm')}<div class="meta"><div class="t">${esc(p.name)}</div><div class="s">Playlist • ${plural(p.track_count, 'música', 'músicas')}</div></div></a>`).join('');
+      html += pls.map((p) => `<a class="lib-item" href="#/playlist/${p.id}" data-ctx="playlist:${p.id}">${playlistArt(p, 'cover-sm')}<div class="meta"><div class="t">${esc(p.name)}</div><div class="s">${p.synced ? `<span class="sync-ic" title="Sincronizada">${icon('refresh')}</span>` : ''}Playlist • ${plural(p.track_count, 'música', 'músicas')}</div></div></a>`).join('');
     } else if (libFilter === 'albums') {
       const al = await api('/albums?sort=recent');
       html = al.map((a) => `<a class="lib-item" href="#/album/${a.id}" data-ctx="album:${a.id}">${art(a.id, a.has_cover, 'cover-sm')}<div class="meta"><div class="t">${esc(a.title)}</div><div class="s">Álbum • ${esc(a.artist)}</div></div></a>`).join('');
@@ -642,7 +652,8 @@ async function render() {
   $('#search-box').hidden = name !== 'search';
   highlightLib(); closeMenu();
   view.style.removeProperty('--hero'); $('#topbar').style.removeProperty('--topbar-bg');
-  clearInterval(dlTimer); stopPreview();
+  clearInterval(dlTimer); clearTimeout(plTimer); stopPreview();
+  view.classList.toggle('quiet', quietRender);
   try {
     await VIEWS[name](arg);
   } catch (e) {
@@ -765,7 +776,8 @@ const VIEWS = {
       <div class="hero">${playlistArt(p, 'hero-cover')}<div style="min-width:0">
         <div class="kind">Playlist</div><h1 class="${p.name.length > 24 ? 'long' : ''}" data-action="pl-edit" style="cursor:pointer">${esc(p.name)}</h1>
         ${p.description ? `<p class="hero-desc">${esc(p.description)}</p>` : ''}
-        <div class="sub"><b>Nano</b><span class="dot">${plural(p.track_count, 'música', 'músicas')}${p.duration ? `, ${fmtLong(p.duration)}` : ''}</span></div></div></div>
+        <div class="sub"><b>Nano</b><span class="dot">${plural(p.track_count, 'música', 'músicas')}${p.duration ? `, ${fmtLong(p.duration)}` : ''}</span></div>
+        ${p.source ? srcBadge(p.source) : ''}</div></div>
       <div class="action-bar">
         ${p.tracks.length ? `<button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
         <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="${ctx.key}" title="Aleatório">${icon('shuffle')}</button>` : ''}
@@ -779,6 +791,8 @@ const VIEWS = {
           <div id="pl-results"></div></section>
       </div>`;
     view.dataset.pid = id; view._playlist = p;
+    const busy = p.source && (p.source.syncing || p.source.pending || p.source.last_status === 'syncing');
+    if (busy) plTimer = setTimeout(() => { if (route.name === 'playlist' && route.arg == id) { refreshView(); loadLibrary(); } }, 4000);
     $('#pl-search').addEventListener('input', debounce(async (e) => {
       const q = e.target.value.trim();
       if (!q) { $('#pl-results').innerHTML = ''; return; }
@@ -855,11 +869,15 @@ const VIEWS = {
     qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') dlSearch(); });
     $('#dl-form').onsubmit = async (e) => {
       e.preventDefault();
-      const query = $('#dl-input').value.trim();
-      if (!query) return;
-      const r = await api('/downloads', { json: { query } });
+      const lines = $('#dl-input').value.split('\n').map((x) => x.trim()).filter(Boolean);
+      if (!lines.length) return;
+      const pls = lines.filter(isPlaylistLink), rest = lines.filter((x) => !isPlaylistLink(x));
       $('#dl-input').value = '';
-      toast(r.ids.length > 1 ? `${r.ids.length} downloads na fila` : 'Download na fila');
+      for (const u of pls) await importPlaylist(u, pls.length === 1 && !rest.length);   // playlists: criadas e sincronizadas
+      if (rest.length) {
+        const r = await api('/downloads', { json: { query: rest.join('\n') } });
+        toast(r.ids.length > 1 ? `${r.ids.length} downloads na fila` : 'Download na fila');
+      }
       refreshJobs();
     };
     if (dl.q.length >= 2 && (pre || !dl.items.length) && !dl.view) dlSearch(); else renderDl();
@@ -887,6 +905,18 @@ const VIEWS = {
           ? 'Mistura o fim de uma música com o início da seguinte. Com 0 fica desligado.'
           : 'Este dispositivo (iPhone/iPad) não deixa o browser controlar o volume, por isso o crossfade não está disponível aqui.',
           `<input type="range" class="rng" min="0" max="12" step="1" value="${v.crossfade}" data-set="crossfade" ${volumeSupported ? '' : 'disabled'}><span class="rng-val" id="cf-val">${v.crossfade ? v.crossfade + ' s' : 'Desligado'}</span>`)}
+      </section>
+
+      <section class="set-card"><h2>Vídeos curtos</h2>
+        ${row('Gerar vídeos curtos automaticamente', `O Spotify não partilha os seus Canvas. O Pobrefy cria um parecido: 8 segundos do videoclipe oficial no YouTube, sem som, na vertical e em loop. Vídeos parados (lyric videos, capas fixas) são ignorados e aí a capa anima-se sozinha. Também podes pôr o teu: <code>canvas.mp4</code> na pasta do álbum ou <code>Título.canvas.mp4</code> ao lado da música.`,
+          `<input type="checkbox" class="chk" data-set="canvas_auto" ${v.canvas_auto ? 'checked' : ''}>`)}
+        ${row('Na biblioteca', `${sys.canvas.ok} músicas com vídeo · ${sys.canvas.none} sem videoclipe utilizável${sys.canvas.queued ? ` · ${sys.canvas.queued} na fila` : ''}. Os vídeos novos são criados quando tocas uma música e depois de cada download.`,
+          `<button class="ghost-btn" data-action="canvas-all">Gerar para toda a biblioteca</button>`)}
+      </section>
+
+      <section class="set-card"><h2>Playlists sincronizadas</h2>
+        ${row('Verificar as playlists originais', `Cola o link de uma playlist do Spotify ou do Deezer em Downloads (ou em + Importar). O Pobrefy cria a playlist, descarrega só o que falta e fica a vigiá-la: músicas novas entram, as removidas saem. ${sys.synced ? plural(sys.synced, 'playlist sincronizada', 'playlists sincronizadas') + '.' : ''}`,
+          `<select class="sel" data-set="pl_sync_hours">${opt([[1, 'A cada hora'], [3, 'A cada 3 horas'], [6, 'A cada 6 horas'], [12, 'A cada 12 horas'], [24, 'Uma vez por dia']], v.pl_sync_hours)}</select>`)}
       </section>
 
       <section class="set-card"><h2>Biblioteca</h2>
@@ -1003,6 +1033,7 @@ pv.addEventListener('timeupdate', () => {
 async function dlSearch() {
   const input = $('#dl-q'); if (!input) return;
   const q = input.value.trim();
+  if (isPlaylistLink(q)) { input.value = ''; return importPlaylist(q); }
   if (looksLikeLink(q)) {   // um link é para a caixa "Colar links"
     $('#dl-input').value = q; $('#dl-paste').open = true; input.value = ''; dl.q = ''; dl.items = []; dl.view = null; dl.stack = [];
     return renderDl();
@@ -1111,7 +1142,7 @@ async function saveSetting(key, val) {
     const r = await api('/settings', { method: 'PUT', json: { [key]: val } });
     S = { ...S, ...r.values }; toast('Guardado');
   } catch (err) { if (err.message !== 'auth') toast(err.message); }
-  if (route.name === 'settings') { const y = view.scrollTop; await VIEWS.settings(); view.scrollTop = y; }
+  if (route.name === 'settings') { const y = view.scrollTop; view.classList.add('quiet'); await VIEWS.settings(); view.scrollTop = y; }
 }
 view.addEventListener('input', (e) => {
   const el = e.target.closest('input[data-set="crossfade"]');
@@ -1120,7 +1151,7 @@ view.addEventListener('input', (e) => {
 view.addEventListener('change', (e) => {
   const el = e.target.closest('[data-set]'); if (!el) return;
   const key = el.dataset.set;
-  const val = el.type === 'checkbox' ? el.checked : el.type === 'range' || ['dl_threads', 'auto_scan_min'].includes(key) ? +el.value : el.value;
+  const val = el.type === 'checkbox' ? el.checked : el.type === 'range' || ['dl_threads', 'auto_scan_min', 'pl_sync_hours'].includes(key) ? +el.value : el.value;
   saveSetting(key, val);
 });
 
@@ -1139,8 +1170,11 @@ async function searchResults(q) {
   const nothing = !r.tracks.length && !r.albums.length && !r.artists.length && !r.playlists.length;
   const dlBtn = `<div class="dl-box" style="margin-top:8px"><h2>Não está na biblioteca?</h2><p>Procura "${esc(q)}" no Spotify/YouTube e descarrega para o servidor.</p>
      <button class="primary-btn" data-action="download-more" data-q="${esc(q)}">Descarregar "${esc(q.length > 40 ? q.slice(0, 40) + '…' : q)}"</button></div>`;
-  if (/^https?:\/\/(open\.)?spotify\.com\//.test(q) || /^spotify:/.test(q)) {
-    box.innerHTML = `<div class="dl-box"><h2>Link do Spotify detetado</h2><p>Queres descarregar isto para a tua biblioteca?</p>
+  if (/^https?:\/\/(open\.)?spotify\.com\//.test(q) || /^spotify:/.test(q) || isPlaylistLink(q)) {
+    box.innerHTML = isPlaylistLink(q)
+      ? `<div class="dl-box"><h2>Playlist detetada</h2><p>O Pobrefy cria esta playlist, descarrega as músicas que faltam e mantém-na sincronizada com a original.</p>
+        <button class="primary-btn" data-action="import-pl" data-q="${esc(q)}">Importar e sincronizar</button></div>`
+      : `<div class="dl-box"><h2>Link do Spotify detetado</h2><p>Queres descarregar isto para a tua biblioteca?</p>
       <button class="primary-btn" data-action="download-more" data-q="${esc(q)}">Descarregar</button></div>`;
     return;
   }
@@ -1273,6 +1307,7 @@ document.addEventListener('click', async (e) => {
         if (await confirmModal('Apagar tudo do offline?', 'Remove as músicas guardadas neste dispositivo. Continuam no servidor.')) { await removeOffline(Object.keys(OFF.meta)); if (route.name === 'settings') render(); }
         break;
       case 'dev-rename': renameDevice(); break;
+      case 'canvas-all': { const r = await api('/canvas/generate-all', { json: {} }); toast(r.queued ? `${r.queued} vídeos na fila: vão sendo criados em segundo plano` : 'Não há músicas novas para gerar'); break; }
       case 'set-lyrics': await api('/lyrics/prefetch', { json: {} }); toast('A procurar letras em segundo plano…'); break;
       case 'set-archive': if (await confirmModal('Limpar o histórico de downloads?', 'O spotDL esquece o que já descarregou. A pasta e a biblioteca não são afetadas, mas músicas que apagaste podem voltar a ser descarregadas.')) { await api('/downloads/archive/clear', { json: {} }); toast('Histórico limpo'); render(); } break;
       case 'nf-menu': { const t = uiTrack(); if (t) trackMenu(e, [t]); break; }
@@ -1292,7 +1327,10 @@ document.addEventListener('click', async (e) => {
       case 'pl-menu': {
         const p = view._playlist;
         menuCtx = { tracks: p.tracks, playlist: p };
-        const html = `<button data-m="pl-edit">${icon('edit')}Editar detalhes</button>
+        const html = `${p.source ? `<button data-m="pl-sync">${icon('refresh')}Sincronizar agora</button>
+          <button data-m="pl-src-toggle">${icon(p.source.enabled ? 'pause' : 'play')}${p.source.enabled ? 'Pausar sincronização' : 'Retomar sincronização'}</button>
+          <button data-m="pl-unlink">${icon('close')}Deixar de sincronizar</button><hr>` : ''}
+          <button data-m="pl-edit">${icon('edit')}Editar detalhes</button>
           ${p.tracks.length ? `<button data-m="queue">${icon('queue')}Adicionar à fila</button>` : ''}
           <hr><button data-m="pl-delete">${icon('trash')}Apagar playlist</button>`;
         isMobile() ? openSheet(html) : openMenu(e.clientX, e.clientY, html);
@@ -1304,7 +1342,13 @@ document.addEventListener('click', async (e) => {
         await api(`/playlists/${view.dataset.pid}/tracks`, { json: { track_ids: [+a.dataset.tid] } });
         toast('Adicionada à playlist'); const y = view.scrollTop; await render(); view.scrollTop = y; loadLibrary(); break;
       }
-      case 'new-playlist': newPlaylist(); break;
+      case 'new-playlist': {
+        menuCtx = { tracks: [] };
+        const html = `<button data-m="pl-create">${icon('plus')}Criar playlist</button><button data-m="pl-import">${icon('refresh')}Importar do Spotify ou Deezer</button>`;
+        const r = a.getBoundingClientRect();
+        isMobile() ? openSheet(html) : openMenu(r.left, r.bottom + 6, html); break;
+      }
+      case 'import-pl': importPlaylist(a.dataset.q); break;
       case 'rescan': await api('/scan', { json: {} }); toast('A atualizar a biblioteca…'); pollScan(); break;
       case 'download-more': location.hash = `#/downloads?q=${encodeURIComponent(a.dataset.q)}`; break;
       case 'dl-cancel': await api(`/downloads/${a.dataset.id}`, { method: 'DELETE' }); refreshJobs(); break;
@@ -1398,9 +1442,9 @@ function setCanvas(url) {
   const v = $('#nf-canvas'), media = $('#nf-media');
   if (url) {
     if (v.getAttribute('src') !== url) v.src = url;
-    v.hidden = false; media.classList.add('has-canvas');
+    v.hidden = false; media.classList.add('has-canvas'); nowEl.classList.add('canvas-full');
     if (isPlayingNow() && nowOpen()) v.play().catch(() => {});
-  } else { v.pause(); v.removeAttribute('src'); v.load(); v.hidden = true; media.classList.remove('has-canvas'); }
+  } else { v.pause(); v.removeAttribute('src'); v.load(); v.hidden = true; media.classList.remove('has-canvas'); nowEl.classList.remove('canvas-full'); }
 }
 async function loadExtras() {
   const t = uiTrack(); if (!t) return;
@@ -1414,6 +1458,7 @@ async function loadExtras() {
     LY.lines = r.lyrics.synced || []; LY.plain = r.lyrics.plain; LY.source = r.lyrics.source; LY.loaded = true;
     if (isOff(t.id)) store.set('ly.' + t.id, r.lyrics);
     setCanvas(r.canvas && navigator.onLine ? `/api/canvas/${t.id}` : null);
+    if (r.canvas_pending) waitCanvas(t.id);
     renderLyrics(); syncLyrics(uiPos(), true);
   } catch (e) {
     const c = store.get('ly.' + t.id, null);        // letra guardada com a música offline
@@ -1445,12 +1490,38 @@ function syncLyrics(pos, jump) {
 }
 for (const ev of ['wheel', 'touchmove']) $('#nf-lyrics').addEventListener(ev, () => { LY.holdUntil = Date.now() + 4000; }, { passive: true });
 
+const RE_PL = /(open\.spotify\.com\/(intl-[\w-]+\/)?playlist\/|spotify:playlist:|deezer\.com\/([a-z]{2}\/)?playlist\/|link\.deezer\.com\/|deezer\.page\.link\/)/i;
+const isPlaylistLink = (u) => RE_PL.test(String(u || ''));
+let plTimer = 0;
+async function importPlaylist(url, go = true) {
+  try {
+    const r = await api('/playlists/import', { json: { url } });
+    toast(r.created ? 'Playlist importada: a ler as músicas e a descarregar o que falta…' : 'Esta playlist já estava sincronizada: a verificar novidades…');
+    loadLibrary();
+    if (go) location.hash = `#/playlist/${r.playlist_id}`;
+  } catch (e) { toast(e.message); }
+}
+function srcBadge(s) {
+  const busy = s.syncing || s.last_status === 'syncing';
+  const st = busy ? 'a ler a playlist original…' : s.pending ? `a descarregar ${s.pending}…` : s.last_status === 'error' ? `erro: ${esc(s.last_error || 'falhou')}` : `verificada ${s.last_sync ? ago(s.last_sync) : '—'}`;
+  return `<div class="sync-badge ${s.last_status === 'error' ? 'err' : ''} ${busy || s.pending ? 'busy' : ''}">${icon('refresh')}<span>Sincronizada com ${s.kind === 'spotify' ? 'o Spotify' : 'o Deezer'}${s.enabled ? '' : ' (em pausa)'} · ${s.matched} de ${s.total} músicas · ${st}</span></div>`;
+}
+// o vídeo curto está a ser gerado no servidor: volta a perguntar durante ~2 minutos
+function waitCanvas(id, tries = 0) {
+  setTimeout(async () => {
+    if (LY.id !== id || tries > 30) return;
+    try { const r = await api(`/extras/${id}`); if (LY.id !== id) return; if (r.canvas) return setCanvas(`/api/canvas/${id}`); if (!r.canvas_pending) return; } catch { return; }
+    waitCanvas(id, tries + 1);
+  }, tries ? 4000 : 3000);
+}
+
 // ------------------------------------------------------------------ Modo offline (Cache API + service worker)
 const OFF = { cache: 'pobrefy-audio-v1', meta: store.get('offline', {}), busy: false };
 const isOff = (id) => !!OFF.meta[id];
 const fmtBytes = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GB' : n >= 1024 ** 2 ? Math.round(n / 1024 ** 2) + ' MB' : Math.round(n / 1024) + ' KB');
 const offSize = () => Object.values(OFF.meta).reduce((n, t) => n + (t.size || 0), 0);
-async function refreshView() { const y = view.scrollTop; await render(); view.scrollTop = y; }
+let quietRender = false;   // atualizações em segundo plano: sem repetir as animações de entrada
+async function refreshView() { const y = view.scrollTop; quietRender = true; try { await render(); } finally { quietRender = false; } view.scrollTop = y; }
 
 async function saveOffline(tracks) {
   if (!('caches' in window)) return toast('Este browser não suporta o modo offline');

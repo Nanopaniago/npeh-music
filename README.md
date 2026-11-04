@@ -5,9 +5,11 @@ O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietP
 - **Downloads**: pesquisa por nome de música, álbum ou artista (com pré-visualização de 30 s) ou cola links do Spotify. O spotDL descarrega e a biblioteca atualiza-se sozinha. Nunca descarrega duas vezes a mesma música.
 - **Qualidade**: por defeito guarda o áudio original do YouTube (Opus) sem o reconverter. Também há M4A, MP3, OGG, FLAC e WAV nas Configurações.
 - **Capa e letra**: a capa vem embutida em todos os ficheiros e a letra (sincronizada, quando existir) é gravada nas tags e num `.lrc`. O ecrã "Agora a tocar" mostra a letra a acompanhar a música.
-- **Vídeo curto (Canvas)**: o Spotify não disponibiliza os seus Canvas. Se puseres um `canvas.mp4` na pasta do álbum, ou `Título.canvas.mp4` ao lado da música, o ecrã "Agora a tocar" mostra-o em loop; sem vídeo, a capa anima-se devagar.
+- **Vídeos curtos (estilo Canvas)**: o Spotify não partilha os seus Canvas, por isso o Pobrefy cria um parecido para cada música. São 8 segundos do videoclipe oficial no YouTube, sem som, na vertical e em loop, e os vídeos parados são ignorados. No telemóvel ocupam o ecrã inteiro, como no Spotify. Um `canvas.mp4` na pasta do álbum, ou `Título.canvas.mp4` ao lado da música, tem prioridade.
+- **Playlists sincronizadas**: cola o link de uma playlist do Spotify ou do Deezer em Downloads. O Pobrefy cria a playlist, descarrega só o que falta e vigia a original de X em X horas: as músicas novas entram e as removidas saem.
 - **Offline**: guarda músicas, álbuns e playlists no dispositivo e toca sem internet.
 - **Dispositivos**: controla a reprodução de outro dispositivo (telemóvel ↔ computador), como o Spotify Connect.
+- **Visual**: glow subtil na cor da música que está a tocar e animações suaves (desligam-se sozinhas com "reduzir movimento" no sistema).
 - **Streaming**: início, pesquisa, álbuns, artistas, playlists, "Músicas de que gostas", fila, aleatório, repetir, crossfade e controlos no ecrã de bloqueio.
 - **PWA**: instala-se no telemóvel e funciona através do Cloudflare Tunnel, protegida por login.
 - **Leve**: um único container com FastAPI e SQLite, limitado a 512 MB de RAM no compose.

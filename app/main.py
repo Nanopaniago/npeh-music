@@ -12,7 +12,8 @@ from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import discover, downloader, lyrics, scanner, system
+from . import canvas as canvasgen
+from . import discover, downloader, lyrics, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -35,10 +36,43 @@ async def auto_scan_loop():
             logging.getLogger("auto_scan").exception("falhou")
 
 
+async def playlist_sync_loop():
+    """Verifica as playlists sincronizadas de X em X horas (Configurações)."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            for sid in await asyncio.to_thread(sources.due_sources):
+                sources.start_sync(sid)
+        except Exception:  # noqa
+            logging.getLogger("sources").exception("falhou")
+        await asyncio.sleep(300)
+
+
+def _after_job(job_id: int):
+    sources.relink()                       # faixas novas entram nas playlists sincronizadas
+    if not app_settings.get_all()["canvas_auto"]:
+        return
+    # vídeos curtos só para as faixas deste download
+    keys = {r["key"] for r in rows("SELECT key FROM dl_items WHERE job_id=? AND status='done'", (job_id,))}
+    ids = set()
+    if keys:
+        lib = sources._library_map()
+        ids = {tid for k in keys for tid, _ in lib.get(k, [])[:1]}
+    else:                                  # links colados: faixas que entraram depois de o download começar
+        job = row("SELECT created_at FROM jobs WHERE id=?", (job_id,))
+        if job:
+            ids = {r["id"] for r in rows("SELECT id FROM tracks WHERE added_at >= ?", (job["created_at"],))}
+    for tid in ids:
+        canvasgen.request(tid, 5)
+
+
 @asynccontextmanager
 async def lifespan(app):
     init_db()
-    tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop())]
+    downloader.AFTER_JOB.append(_after_job)
+    canvasgen.start()
+    tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop()),
+             asyncio.create_task(playlist_sync_loop())]
     if SCAN_ON_START:
         tasks.append(asyncio.create_task(asyncio.to_thread(scanner.scan)))
     yield
@@ -271,7 +305,8 @@ def played(track_id: int):
 # ---------------------------------------------------------------- playlists
 def list_playlists():
     pls = rows("""SELECT p.id, p.name, p.description, p.updated_at,
-                  (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id=p.id) AS track_count
+                  (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id=p.id) AS track_count,
+                  (SELECT kind FROM pl_sources s WHERE s.playlist_id=p.id) AS synced
                   FROM playlists p ORDER BY p.updated_at DESC""")
     for p in pls:
         p["covers"] = [r["album_id"] for r in rows(
@@ -304,7 +339,44 @@ def get_playlist(pid: int):
                       (pid,)))
     p["tracks"] = items
     p["duration"] = sum(t["duration"] or 0 for t in items)
+    p["source"] = sources.info(pid)
     return p
+
+
+@app.post("/api/playlists/import")
+def import_playlist(url: str = Body(..., embed=True)):
+    """Cria (ou volta a sincronizar) uma playlist a partir de um link do Spotify ou do Deezer."""
+    try:
+        pid, created = sources.import_url(url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"playlist_id": pid, "created": created}
+
+
+@app.post("/api/playlists/{pid}/sync")
+def sync_playlist(pid: int):
+    s = sources.info(pid)
+    if not s:
+        raise HTTPException(404, "Esta playlist não está sincronizada")
+    sources.start_sync(s["id"])
+    return {"ok": True}
+
+
+@app.patch("/api/playlists/{pid}/source")
+def toggle_source(pid: int, enabled: bool = Body(..., embed=True)):
+    c = get_conn()
+    c.execute("UPDATE pl_sources SET enabled=? WHERE playlist_id=?", (int(enabled), pid))
+    c.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/playlists/{pid}/source")
+def unlink_source(pid: int):
+    """Deixa de sincronizar: a playlist fica como uma playlist normal."""
+    c = get_conn()
+    c.execute("DELETE FROM pl_sources WHERE playlist_id=?", (pid,))
+    c.commit()
+    return {"ok": True}
 
 
 @app.patch("/api/playlists/{pid}")
@@ -322,6 +394,7 @@ def update_playlist(pid: int, data: dict = Body(...)):
 def delete_playlist(pid: int):
     c = get_conn()
     c.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
+    c.execute("DELETE FROM pl_sources WHERE playlist_id=?", (pid,))
     c.execute("DELETE FROM playlists WHERE id=?", (pid,))
     c.commit()
     return {"ok": True}
@@ -428,26 +501,22 @@ def stream(track_id: int, request: Request):
     return _serve_file(path, request, ctype)
 
 
-def _canvas_file(track_path: Path):
-    """Vídeo curto (loop) opcional: <música>.canvas.mp4|webm ou canvas.mp4|webm na pasta do álbum."""
-    for ext in (".mp4", ".webm"):
-        for p in (Path(str(track_path.with_suffix("")) + ".canvas" + ext), track_path.parent / ("canvas" + ext)):
-            if p.exists():
-                return p
-    return None
-
-
 @app.get("/api/extras/{track_id}")
 async def extras(track_id: int):
     """Letra + vídeo curto da faixa que está a tocar."""
     path = _track_path(track_id)
     ly = await asyncio.to_thread(lyrics.get, track_id)
-    return {"lyrics": ly, "canvas": _canvas_file(path) is not None}
+    has = canvasgen.find(track_id, path) is not None
+    pending = False
+    if not has and app_settings.get_all()["canvas_auto"]:
+        canvasgen.request(track_id, 0)          # gera o vídeo curto em segundo plano (prioridade máxima)
+        pending = track_id in canvasgen._queued
+    return {"lyrics": ly, "canvas": has, "canvas_pending": pending}
 
 
 @app.get("/api/canvas/{track_id}")
 def canvas(track_id: int, request: Request):
-    p = _canvas_file(_track_path(track_id))
+    p = canvasgen.find(track_id, _track_path(track_id))
     if not p:
         raise HTTPException(404)
     return _serve_file(p, request, "video/webm" if p.suffix == ".webm" else "video/mp4", "public, max-age=3600")
@@ -580,7 +649,8 @@ def system_info():
                 "(SELECT COUNT(*) FROM artists) AS artists FROM tracks")
     return {"music_dir": str(MUSIC_DIR), "download_dir": str(app_settings.download_path(s)),
             "disk": system.disk(), "library": stats, "scan": scanner.state,
-            "auth_enabled": bool(APP_PASSWORD), "lyrics": lyrics.stats(),
+            "auth_enabled": bool(APP_PASSWORD), "lyrics": lyrics.stats(), "canvas": canvasgen.stats(),
+            "synced": row("SELECT COUNT(*) c FROM pl_sources")["c"],
             "archive": downloader.ARCHIVE.exists() and sum(1 for _ in open(downloader.ARCHIVE, errors="ignore"))}
 
 
@@ -594,6 +664,11 @@ async def lyrics_prefetch():
     if not lyrics.state["running"]:
         asyncio.get_running_loop().run_in_executor(None, lyrics.prefetch, None)
     return {"started": True}
+
+
+@app.post("/api/canvas/generate-all")
+def canvas_generate_all():
+    return {"queued": canvasgen.request_all()}
 
 
 @app.get("/api/lyrics/status")

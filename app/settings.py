@@ -16,6 +16,7 @@ STRUCTURES = {
 FORMATS = ("original", "m4a", "mp3", "ogg", "flac", "wav")
 BITRATES = ("disable", "auto", "128k", "192k", "256k", "320k")
 SCAN_OPTIONS = (0, 15, 60, 360, 1440)
+SYNC_OPTIONS = (1, 3, 6, 12, 24)
 LOSSLESS = {"flac", "wav"}
 
 
@@ -43,6 +44,8 @@ DEFAULTS = {
     "dl_bitrate": "320k",
     "dl_threads": _clamp_int(SPOTDL_THREADS, 1, 4, 2),
     "dl_lyrics": True,
+    "pl_sync_hours": 6,
+    "canvas_auto": True,
 }
 
 class SettingError(ValueError):
@@ -84,7 +87,12 @@ def _validate(key, v):
         if s.startswith("/") or ".." in s or len(s) > 200 or "\x00" in s:
             raise SettingError("Modelo inválido: não use caminhos absolutos nem '..'.")
         return s
-    if key == "dl_lyrics":
+    if key == "pl_sync_hours":
+        i = int(v)
+        if i not in SYNC_OPTIONS:
+            raise SettingError("Intervalo de sincronização inválido.")
+        return i
+    if key in ("dl_lyrics", "canvas_auto"):
         if isinstance(v, bool):
             return v
         raise SettingError("Valor inválido.")
