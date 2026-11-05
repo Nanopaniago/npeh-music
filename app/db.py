@@ -154,11 +154,17 @@ def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
     # migração: coluna "label" nos downloads (bases de dados criadas antes desta versão)
+    migrated = set()
+    tcols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+    if "genre" not in tcols:   # versões anteriores não guardavam o género: obriga a reler as etiquetas uma vez
+        conn.execute("ALTER TABLE tracks ADD COLUMN genre TEXT")
+        migrated.add("genre")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     if "label" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN label TEXT")
     conn.execute("DELETE FROM dl_items WHERE status NOT IN ('queued','running') AND created_at < strftime('%s','now') - 2592000")
     conn.commit()
+    return migrated
 
 
 def rows(sql, params=()):

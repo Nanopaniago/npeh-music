@@ -10,6 +10,8 @@ O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietP
 - **Offline**: guarda músicas, álbuns e playlists no dispositivo e toca sem internet.
 - **Dispositivos**: controla a reprodução de outro dispositivo (telemóvel ↔ computador), como o Spotify Connect.
 - **Visual**: glow subtil na cor da música que está a tocar e animações suaves (desligam-se sozinhas com "reduzir movimento" no sistema).
+- **Reprodução contínua (rádio automática)**: quando a fila acaba, a música não para. O Pobrefy continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão, com as tuas mais tocadas a aparecer mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Também há "Iniciar rádio" numa música e "Rádio" num artista.
+- **Atalhos de playlists**: botão + em cada música, no player e nos álbuns, artistas e playlists. O seletor tem pesquisa e cria logo uma playlist com o nome que escreves. Há seleção múltipla (Ctrl/Cmd/Shift + clique) com uma barra de ações, podes arrastar músicas para uma playlist da barra lateral (ou para o + para criar uma nova) e há "Guardar a fila como playlist". As playlists nunca ficam com músicas repetidas.
 - **Streaming**: início, pesquisa, álbuns, artistas, playlists, "Músicas de que gostas", fila, aleatório, repetir, crossfade e controlos no ecrã de bloqueio.
 - **PWA**: instala-se no telemóvel e funciona através do Cloudflare Tunnel, protegida por login.
 - **Leve**: um único container com FastAPI e SQLite, limitado a 512 MB de RAM no compose.

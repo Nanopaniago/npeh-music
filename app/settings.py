@@ -46,6 +46,7 @@ DEFAULTS = {
     "dl_lyrics": True,
     "pl_sync_hours": 6,
     "canvas_auto": True,
+    "autoplay": True,
 }
 
 class SettingError(ValueError):
@@ -92,7 +93,7 @@ def _validate(key, v):
         if i not in SYNC_OPTIONS:
             raise SettingError("Intervalo de sincronização inválido.")
         return i
-    if key in ("dl_lyrics", "canvas_auto"):
+    if key in ("dl_lyrics", "canvas_auto", "autoplay"):
         if isinstance(v, bool):
             return v
         raise SettingError("Valor inválido.")

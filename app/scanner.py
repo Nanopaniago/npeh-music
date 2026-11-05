@@ -115,6 +115,7 @@ def _read_tags(path: Path):
         "disc_no": _int(_first(tags, "discnumber")),
         "year": (_first(tags, "date") or _first(tags, "originaldate"))[:4] or None,
         "duration": round(f.info.length, 2) if f is not None and f.info else None,
+        "genre": "; ".join(str(g).strip() for g in (tags.get("genre") or []) if str(g).strip())[:200] if tags else "",
     }
 
 
@@ -168,16 +169,16 @@ def scan(full=False):
                 if rel in known:
                     conn.execute(
                         """UPDATE tracks SET title=?, artist=?, artist_id=?, album_id=?, track_no=?, disc_no=?,
-                           duration=?, size=?, mtime=? WHERE path=?""",
+                           duration=?, size=?, mtime=?, genre=? WHERE path=?""",
                         (t["title"], t["artist"], ar_id, al_id, t["track_no"], t["disc_no"],
-                         t["duration"], st.st_size, st.st_mtime, rel),
+                         t["duration"], st.st_size, st.st_mtime, t["genre"], rel),
                     )
                 else:
                     conn.execute(
                         """INSERT INTO tracks(path, title, artist, artist_id, album_id, track_no, disc_no,
-                           duration, size, mtime) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                           duration, size, mtime, genre) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                         (rel, t["title"], t["artist"], ar_id, al_id, t["track_no"], t["disc_no"],
-                         t["duration"], st.st_size, st.st_mtime),
+                         t["duration"], st.st_size, st.st_mtime, t["genre"]),
                     )
                     state["added"] += 1
                 cover = conn.execute("SELECT cover FROM albums WHERE id=?", (al_id,)).fetchone()[0]

@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
   <div id="app" class="layout">
@@ -61,7 +61,7 @@
     </main>
 
     <aside class="panel queue-panel" id="queue-panel" hidden>
-      <header><h3>Fila</h3><button class="icon-btn" data-action="toggle-queue"><svg class="i"><use href="#i-close"/></svg></button></header>
+      <header><h3>Fila</h3><span style="flex:1"></span><button class="ghost-btn q-save" data-action="save-queue" title="Guardar a fila como playlist">Guardar como playlist</button><button class="icon-btn" data-action="toggle-queue"><svg class="i"><use href="#i-close"/></svg></button></header>
       <div id="queue-list"></div>
     </aside>
 
@@ -74,6 +74,7 @@
           <span id="np-remote" class="np-remote" hidden></span>
         </div>
         <button class="icon-btn like-btn" id="np-like" data-action="like-current" aria-label="Gosto"><svg class="i"><use href="#i-heart"/></svg></button>
+        <button class="icon-btn add-now" id="np-add" data-action="add-current" title="Adicionar a uma playlist"><svg class="i"><use href="#i-addpl"/></svg></button>
         <button class="icon-btn mini-play" id="mini-play" data-action="toggle" aria-label="Reproduzir"><svg class="i"><use href="#i-play"/></svg></button>
       </div>
       <div class="controls">
@@ -126,7 +127,7 @@
     <div class="nf-foot">
       <div class="nf-meta">
         <div><div id="nf-title" class="nf-title"></div><div id="nf-artist" class="nf-artist"></div></div>
-        <button class="icon-btn like-btn" id="nf-like" data-action="like-current"><svg class="i"><use href="#i-heart"/></svg></button>
+        <span class="nf-acts"><button class="icon-btn" data-action="add-current" title="Adicionar a uma playlist"><svg class="i"><use href="#i-addpl"/></svg></button><button class="icon-btn like-btn" id="nf-like" data-action="like-current"><svg class="i"><use href="#i-heart"/></svg></button></span>
       </div>
       <div class="slider" id="nf-seek"><div class="fill"></div><div class="knob"></div></div>
       <div class="nf-times"><span id="nf-cur">0:00</span><span id="nf-dur">0:00</span></div>
@@ -158,6 +159,14 @@
   <div id="menu" class="ctx-menu" hidden></div>
   <div id="modal" class="modal" hidden></div>
   <div id="toast" class="toast" hidden></div>
+  <div class="selbar" id="selbar" hidden>
+    <span id="sel-n"></span>
+    <button data-action="sel-play"><svg class="i"><use href="#i-play"/></svg>Tocar</button>
+    <button data-action="sel-queue"><svg class="i"><use href="#i-queue"/></svg>Fila</button>
+    <button data-action="sel-add" class="hl"><svg class="i"><use href="#i-addpl"/></svg>Playlist</button>
+    <button data-action="sel-offline"><svg class="i"><use href="#i-offline"/></svg>Offline</button>
+    <button data-action="sel-clear" class="x" title="Limpar seleção (Esc)"><svg class="i"><use href="#i-close"/></svg></button>
+  </div>
   <audio id="audio" preload="auto"></audio>
 
   <svg width="0" height="0" style="position:absolute">
@@ -194,8 +203,10 @@
     <symbol id="i-offline" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 15-5-5h3.5V7h3v5H17Z" fill="currentColor"/></symbol>
     <symbol id="i-phone" viewBox="0 0 24 24"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm0 3v13h10V5Zm5 14.2a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z" fill="currentColor"/></symbol>
     <symbol id="i-monitor" viewBox="0 0 24 24"><path d="M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 2v9h16V6Z" fill="currentColor"/></symbol>
+    <symbol id="i-addpl" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm1 3.5h-2v3.5H7.5v2H11v3.5h2V13h3.5v-2H13Z" fill="currentColor"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24"><path d="M12 10.2a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6ZM7.8 7.8l1.4 1.4a4 4 0 0 0 0 5.6l-1.4 1.4a6 6 0 0 1 0-8.4Zm8.4 0a6 6 0 0 1 0 8.4l-1.4-1.4a4 4 0 0 0 0-5.6Zm-11.3-2.9 1.4 1.4a8 8 0 0 0 0 11.4l-1.4 1.4a10 10 0 0 1 0-14.2Zm14.2 0a10 10 0 0 1 0 14.2l-1.4-1.4a8 8 0 0 0 0-11.4Z" fill="currentColor"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15.2 3.8 5 5L9 20H4v-5Zm0 2.8L6 15.8V18h2.2l9.2-9.2Z" fill="currentColor"/></symbol>
   </svg>
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

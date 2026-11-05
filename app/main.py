@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import discover, downloader, lyrics, scanner, sources, system
+from . import discover, downloader, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -68,13 +68,14 @@ def _after_job(job_id: int):
 
 @asynccontextmanager
 async def lifespan(app):
-    init_db()
+    migrated = init_db()
     downloader.AFTER_JOB.append(_after_job)
     canvasgen.start()
     tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop()),
              asyncio.create_task(playlist_sync_loop())]
-    if SCAN_ON_START:
-        tasks.append(asyncio.create_task(asyncio.to_thread(scanner.scan)))
+    if SCAN_ON_START or "genre" in migrated:
+        # depois de atualizar de uma versão sem géneros, relê as etiquetas de tudo (uma vez)
+        tasks.append(asyncio.create_task(asyncio.to_thread(scanner.scan, "genre" in migrated)))
     yield
     for t in tasks:
         t.cancel()
@@ -406,12 +407,17 @@ def add_to_playlist(pid: int, track_ids: list[int] = Body(..., embed=True)):
     if not c.execute("SELECT 1 FROM playlists WHERE id=?", (pid,)).fetchone():
         raise HTTPException(404)
     pos = c.execute("SELECT COALESCE(MAX(position),0) FROM playlist_tracks WHERE playlist_id=?", (pid,)).fetchone()[0]
-    for tid in track_ids:
+    have = {r[0] for r in c.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id=?", (pid,))}
+    added = 0
+    for tid in dict.fromkeys(track_ids):          # sem repetidos (nem no pedido, nem na playlist)
+        if tid in have:
+            continue
         pos += 1
+        added += 1
         c.execute("INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES (?,?,?)", (pid, tid, pos))
     c.execute("UPDATE playlists SET updated_at=strftime('%s','now') WHERE id=?", (pid,))
     c.commit()
-    return {"ok": True, "added": len(track_ids)}
+    return {"ok": True, "added": added, "skipped": len(track_ids) - added}
 
 
 @app.delete("/api/playlists/{pid}/entries/{entry_id}")
@@ -664,6 +670,18 @@ async def lyrics_prefetch():
     if not lyrics.state["running"]:
         asyncio.get_running_loop().run_in_executor(None, lyrics.prefetch, None)
     return {"started": True}
+
+
+@app.post("/api/radio")
+def radio_next(seeds: list[int] = Body(default_factory=list, embed=True),
+               exclude: list[int] = Body(default_factory=list, embed=True),
+               n: int = Body(20, embed=True)):
+    """Próximas músicas para a reprodução nunca parar."""
+    ids = radio.suggest(seeds[:10], exclude[:2000], max(1, min(n, 50)))
+    if not ids:
+        return {"tracks": []}
+    found = {t["id"]: t for t in tracks_q(f"t.id IN ({','.join('?' * len(ids))})", tuple(ids))}
+    return {"tracks": [found[i] for i in ids if i in found]}
 
 
 @app.post("/api/canvas/generate-all")

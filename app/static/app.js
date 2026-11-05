@@ -176,7 +176,13 @@ function next(auto = false) {
   if (!P.queue.length) return;
   if (auto && P.repeat === 'one') { audio.currentTime = 0; audio.play(); return; }
   const n = peekNext();
-  if (n < 0) { killFade(); audio.pause(); audio.currentTime = 0; return; }
+  if (n < 0) {
+    if (canRadio()) {   // a fila acabou: a rádio automática acrescenta músicas parecidas e continua
+      extendRadio().then((ok) => { if (ok) next(auto); else { killFade(); audio.pause(); audio.currentTime = 0; } });
+      return;
+    }
+    killFade(); audio.pause(); audio.currentTime = 0; return;
+  }
   if (P.manual > 0) P.manual--;
   P.idx = n;
   load(true);
@@ -275,7 +281,7 @@ function updateNow() {
   $('#np-title').textContent = t.title; $('#np-title').href = `#/album/${t.album_id}`;
   $('#np-artist').textContent = t.artist; $('#np-artist').href = `#/artist/${t.artist_id}`;
   $('#nf-title').textContent = t.title; $('#nf-artist').textContent = t.artist;
-  $('#nf-context').textContent = P.ctx?.label ? `A tocar de ${P.ctx.label}` : 'A tocar';
+  $('#nf-context').textContent = t.radio ? 'Rádio automática · parecida com o que estavas a ouvir' : P.ctx?.label ? `A tocar de ${P.ctx.label}` : 'A tocar';
   updateLikeButtons();
   document.title = `${t.title} • ${t.artist}`;
   dominantColor(src).then((c) => c && document.documentElement.style.setProperty('--np-bg', c));
@@ -287,6 +293,7 @@ function updateNow() {
   }
   markPlaying(); renderQueue(); pushState();
   if (nowOpen()) loadExtras();
+  if (canRadio() && P.idx >= P.queue.length - 2) extendRadio();   // prepara as próximas antes de a fila acabar
 }
 function updateLikeButtons() {
   const t = uiTrack(); if (!t) return;
@@ -408,7 +415,7 @@ function renderQueue() {
   const html = t
     ? `<h4>A tocar</h4>${item(t, P.idx, true)}
        ${upNext.length ? `<h4>${P.manual ? 'A seguir na fila' : 'A seguir'}${P.ctx?.label ? ` · ${esc(P.ctx.label)}` : ''}</h4>` : ''}
-       ${upNext.map((tr, j) => item(tr, P.idx + 1 + j, false)).join('')}
+       ${upNext.map((tr, j) => ((tr.radio && !(j ? upNext[j - 1] : t).radio) ? `<h4 class="q-radio">${icon('radio')} Rádio automática</h4>` : '') + item(tr, P.idx + 1 + j, false)).join('')}
        ${P.queue.length - P.idx - 1 > 80 ? `<p class="dl-hint">+ ${P.queue.length - P.idx - 81} músicas</p>` : ''}`
     : '<div class="empty"><h3>A fila está vazia</h3><p>Escolhe algo para ouvir.</p></div>';
   $('#queue-list').innerHTML = html;
@@ -442,12 +449,12 @@ function trackTable(tracks, ctx, { album = true, cover = true, numbers = 'index'
   tracks.forEach((t, i) => {
     if (multiDisc && (t.disc_no || 1) !== lastDisc) { lastDisc = t.disc_no || 1; html += `<div class="disc">${icon('note')} Disco ${lastDisc}</div>`; }
     const n = numbers === 'track' ? (t.track_no || i + 1) : i + 1;
-    html += `<div class="tr ${cls}" data-id="${t.id}" data-i="${i}" ${removable ? `data-entry="${t.entry_id}"` : ''}>
+    html += `<div class="tr ${cls}" data-id="${t.id}" data-i="${i}" draggable="true" ${removable ? `data-entry="${t.entry_id}"` : ''}>
       <div class="n"><span>${n}</span><span class="eq"><b></b><b></b><b></b><b></b></span>${icon('play', 'i play')}</div>
       <div class="main-cell">${cover ? art(t.album_id, t.has_cover) : ''}<div style="min-width:0"><div class="tt">${esc(t.title)}${isOff(t.id) ? `<span class="off-mark" title="Disponível offline">${icon('offline')}</span>` : ''}</div>
         <div class="ta"><a href="#/artist/${t.artist_id}">${esc(t.artist)}</a></div></div></div>
       ${album ? `<div class="alb"><a href="#/album/${t.album_id}">${esc(t.album || '')}</a></div>` : ''}
-      <div class="dur"><button class="icon-btn like-btn ${t.liked ? 'on' : ''}" data-action="like">${icon(t.liked ? 'heart-fill' : 'heart')}</button><span class="t">${fmt(t.duration)}</span></div>
+      <div class="dur"><button class="icon-btn add-btn" data-action="add-pl" title="Adicionar a uma playlist">${icon('addpl')}</button><button class="icon-btn like-btn ${t.liked ? 'on' : ''}" data-action="like">${icon(t.liked ? 'heart-fill' : 'heart')}</button><span class="t">${fmt(t.duration)}</span></div>
       <button class="icon-btn more" data-action="track-menu">${icon('more')}</button>
     </div>`;
   });
@@ -504,7 +511,8 @@ function trackMenu(ev, tracks, opts = {}) {
   const html = `
     <button data-m="queue">${icon('queue')}Adicionar à fila</button>
     <button data-m="next">${icon('next')}Tocar a seguir</button>
-    <button data-m="pl">${icon('plus')}Adicionar à playlist</button>
+    <button data-m="pl">${icon('addpl')}Adicionar à playlist</button>
+    ${single ? `<button data-m="radio">${icon('radio')}Iniciar rádio desta música</button>` : `<button data-m="pl-from">${icon('plus')}Criar playlist com estas ${tracks.length}</button>`}
     <button data-m="offline">${icon('offline')}${single && isOff(t.id) ? 'Remover do offline' : 'Disponibilizar offline'}</button>
     ${opts.entry ? `<button data-m="remove">${icon('trash')}Remover desta playlist</button>` : ''}
     <hr>
@@ -532,11 +540,13 @@ const closeModal = () => { const m = $('#modal'); m.hidden = true; m.innerHTML =
 async function handleMenu(action, btn) {
   const c = menuCtx; if (!c) return;
   const { tracks } = c;
-  if (action === 'pl') { await playlistPicker(); return; }
+  if (action === 'pl') { closeMenu(); if ($('#modal').dataset.sheet) closeModal(); pickPlaylist(tracks); return; }
   closeMenu(); if ($('#modal').dataset.sheet) closeModal();
   if (action === 'dev-select') selectDevice(btn.dataset.did);
   if (action === 'dev-rename') renameDevice();
   if (action === 'offline') { if (tracks.every((t) => isOff(t.id))) removeOffline(tracks.map((t) => t.id)); else saveOffline(tracks); }
+  if (action === 'radio') startRadio(tracks);
+  if (action === 'pl-from') createPlaylistWith(tracks);
   if (action === 'queue') addToQueue(tracks);
   if (action === 'next') addToQueue(tracks, true);
   if (action === 'like') setLike(tracks[0], !tracks[0].liked);
@@ -652,7 +662,7 @@ async function render() {
   $('#search-box').hidden = name !== 'search';
   highlightLib(); closeMenu();
   view.style.removeProperty('--hero'); $('#topbar').style.removeProperty('--topbar-bg');
-  clearInterval(dlTimer); clearTimeout(plTimer); stopPreview();
+  clearInterval(dlTimer); clearTimeout(plTimer); stopPreview(); clearSel();
   view.classList.toggle('quiet', quietRender);
   try {
     await VIEWS[name](arg);
@@ -740,7 +750,7 @@ const VIEWS = {
       <div class="action-bar">
         <button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
         <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="${ctx.key}" title="Aleatório">${icon('shuffle')}</button>
-        ${offBtn(a.tracks)}
+        ${offBtn(a.tracks)}${addBtn}
         <button class="icon-btn" data-action="list-menu" title="Mais opções">${icon('more')}</button>
       </div>
       <div class="content">${trackTable(a.tracks, ctx, { album: false, cover: false, numbers: 'track', discs: true })}
@@ -759,6 +769,7 @@ const VIEWS = {
       <div class="action-bar">
         <button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
         <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="${ctx.key}" title="Aleatório">${icon('shuffle')}</button>
+        ${a.top_tracks.length ? `<button class="ghost-btn with-ic" data-action="artist-radio" data-name="${esc(a.name)}">${icon('radio')}Rádio</button>${addBtn}` : ''}
         <button class="ghost-btn" data-action="download-more" data-q="${esc(a.name)}">Descarregar mais</button>
       </div>
       <div class="content">
@@ -781,7 +792,7 @@ const VIEWS = {
       <div class="action-bar">
         ${p.tracks.length ? `<button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
         <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="${ctx.key}" title="Aleatório">${icon('shuffle')}</button>` : ''}
-        ${p.tracks.length ? offBtn(p.tracks) : ''}
+        ${p.tracks.length ? offBtn(p.tracks) + addBtn : ''}
         <button class="icon-btn" data-action="pl-menu" title="Mais opções">${icon('more')}</button>
       </div>
       <div class="content">
@@ -812,7 +823,7 @@ const VIEWS = {
         <div class="sub"><b>Nano</b><span class="dot">${plural(tracks.length, 'música', 'músicas')}</span></div></div></div>
       <div class="action-bar" style="--hero:#5038a0">
         ${tracks.length ? `<button class="play-big" data-action="play-ctx" data-play-ctx="liked">${icon('play')}</button>
-        <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="liked">${icon('shuffle')}</button>${offBtn(tracks)}` : ''}</div>
+        <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="liked">${icon('shuffle')}</button>${offBtn(tracks)}${addBtn}` : ''}</div>
       <div class="content">${tracks.length ? trackTable(tracks, ctx) : `<div class="empty">${icon('heart')}<h3>As músicas de que gostas aparecem aqui</h3><p>Guarda músicas tocando no ícone de coração.</p></div>`}</div>`;
     view.style.setProperty('--hero', '#5038a0'); $('#topbar').style.setProperty('--topbar-bg', '#2d2160');
   },
@@ -905,6 +916,8 @@ const VIEWS = {
           ? 'Mistura o fim de uma música com o início da seguinte. Com 0 fica desligado.'
           : 'Este dispositivo (iPhone/iPad) não deixa o browser controlar o volume, por isso o crossfade não está disponível aqui.',
           `<input type="range" class="rng" min="0" max="12" step="1" value="${v.crossfade}" data-set="crossfade" ${volumeSupported ? '' : 'disabled'}><span class="rng-val" id="cf-val">${v.crossfade ? v.crossfade + ' s' : 'Desligado'}</span>`)}
+        ${row('Reprodução contínua (rádio automática)', 'Quando a fila acaba, a música não para: o Pobrefy continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão. As tuas mais tocadas aparecem mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Desliga-se com "repetir" ativo.',
+          `<input type="checkbox" class="chk" data-set="autoplay" ${v.autoplay ? 'checked' : ''}>`)}
       </section>
 
       <section class="set-card"><h2>Vídeos curtos</h2>
@@ -983,6 +996,7 @@ const VIEWS = {
     </div>`;
   },
 };
+const addBtn = `<button class="icon-btn" data-action="add-ctx" title="Adicionar tudo a uma playlist">${icon('addpl')}</button>`;
 const offBtn = (ts) => `<button class="icon-btn ${ts.length && ts.every((t) => isOff(t.id)) ? 'on' : ''}" data-action="offline-ctx" title="Disponível offline">${icon('offline')}</button>`;
 function playlistCardLiked(n) {
   return card({ href: '#/liked', artHtml: likedArt(), title: 'Músicas de que gostas', sub: `Playlist • ${plural(n, 'música', 'músicas')}`, playCtx: 'liked' });
@@ -1307,6 +1321,23 @@ document.addEventListener('click', async (e) => {
         if (await confirmModal('Apagar tudo do offline?', 'Remove as músicas guardadas neste dispositivo. Continuam no servidor.')) { await removeOffline(Object.keys(OFF.meta)); if (route.name === 'settings') render(); }
         break;
       case 'dev-rename': renameDevice(); break;
+      case 'add-pl': {
+        const t = getTrack(); if (!t) break;
+        const multi = SEL.key === listEl?.dataset.list && SEL.set.has(+row.dataset.i) && SEL.set.size > 1;
+        pickPlaylist(multi ? selTracks() : [t]); break;
+      }
+      case 'add-current': { const t = uiTrack(); if (t) pickPlaylist([t]); break; }
+      case 'add-ctx': { const k = $('#view .tracks[data-list]')?.dataset.list; if (k && lists[k]) pickPlaylist(lists[k].tracks); break; }
+      case 'artist-radio': { const k = $('#view .tracks[data-list]')?.dataset.list; if (k && lists[k]) startRadio(lists[k].tracks.slice(0, 3), `Rádio: ${a.dataset.name}`); break; }
+      case 'save-queue': {
+        const ts = P.queue.slice(Math.max(0, P.idx)); if (!ts.length) { toast('A fila está vazia'); break; }
+        closeModal(); createPlaylistWith(ts, `Fila de ${new Date().toLocaleDateString('pt-PT', { day: 'numeric', month: 'short' })}`); break;
+      }
+      case 'sel-play': { const ts = selTracks(); clearSel(); playList(ts, 0, { key: 'sel', label: 'Seleção' }); break; }
+      case 'sel-queue': { const ts = selTracks(); clearSel(); addToQueue(ts); break; }
+      case 'sel-add': { const ts = selTracks(); clearSel(); pickPlaylist(ts); break; }
+      case 'sel-offline': { const ts = selTracks(); clearSel(); saveOffline(ts); break; }
+      case 'sel-clear': clearSel(); break;
       case 'canvas-all': { const r = await api('/canvas/generate-all', { json: {} }); toast(r.queued ? `${r.queued} vídeos na fila: vão sendo criados em segundo plano` : 'Não há músicas novas para gerar'); break; }
       case 'set-lyrics': await api('/lyrics/prefetch', { json: {} }); toast('A procurar letras em segundo plano…'); break;
       case 'set-archive': if (await confirmModal('Limpar o histórico de downloads?', 'O spotDL esquece o que já descarregou. A pasta e a biblioteca não são afetadas, mas músicas que apagaste podem voltar a ser descarregadas.')) { await api('/downloads/archive/clear', { json: {} }); toast('Histórico limpo'); render(); } break;
@@ -1383,9 +1414,10 @@ document.addEventListener('click', async (e) => {
   }
   if (row && !e.target.closest('a')) {
     if (isMobile()) { const l = lists[listEl?.dataset.list]; if (l) playList(l.tracks, +row.dataset.i, l.ctx); }
-    else { $$('.tr.sel').forEach((r) => r.classList.remove('sel')); row.classList.add('sel'); }
+    else selectRow(row, listEl, e);
     return;
   }
+  if (SEL.set.size && !e.target.closest('#selbar, #modal, #menu')) clearSel();
   const href = e.target.closest('[data-href]');
   if (href && !e.target.closest('a')) location.hash = href.dataset.href;
 });
@@ -1399,12 +1431,13 @@ document.addEventListener('contextmenu', (e) => {
   if (!row || !listEl) return;
   const t = lists[listEl.dataset.list]?.tracks[+row.dataset.i]; if (!t) return;
   e.preventDefault();
+  if (SEL.key === listEl.dataset.list && SEL.set.has(+row.dataset.i) && SEL.set.size > 1) return trackMenu(e, selTracks());
   trackMenu(e, [t], row.dataset.entry ? { entry: row.dataset.entry, pid: view.dataset.pid } : {});
 });
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeMenu(); closeModal(); closeNow(); clearSel(); return; }   // também dentro de caixas de texto
   if (e.target.matches('input, textarea')) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-  if (e.key === 'Escape') { closeMenu(); closeModal(); $('#now-full').hidden = true; }
   if (e.altKey && e.key === 'ArrowRight') next();
   if (e.altKey && e.key === 'ArrowLeft') prev();
 });
@@ -1416,8 +1449,8 @@ view.addEventListener('scroll', () => $('#topbar').classList.toggle('solid', vie
 
 function openQueueSheet() {
   const m = $('#modal');
-  m.innerHTML = `<div class="modal-card queue-sheet" style="max-height:80vh;overflow:auto;align-self:end"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Fila</h3>
-    <button class="icon-btn" onclick="document.getElementById('modal').hidden=true">${icon('close')}</button></div><div class="q-body"></div></div>`;
+  m.innerHTML = `<div class="modal-card queue-sheet" style="max-height:80vh;overflow:auto;align-self:end"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0;flex:1">Fila</h3>
+    <button class="ghost-btn" data-action="save-queue">Guardar como playlist</button><button class="icon-btn" onclick="document.getElementById('modal').hidden=true">${icon('close')}</button></div><div class="q-body"></div></div>`;
   m.hidden = false; renderQueue();
 }
 async function pollScan() {
@@ -1514,6 +1547,140 @@ function waitCanvas(id, tries = 0) {
     waitCanvas(id, tries + 1);
   }, tries ? 4000 : 3000);
 }
+
+// ------------------------------------------------------------------ Rádio automática (a música nunca para)
+let radioBusy = false;
+const canRadio = () => S.autoplay !== false && P.repeat === 'off' && navigator.onLine && !R.target && P.queue.length > 0;
+async function extendRadio() {
+  if (radioBusy) return false;
+  radioBusy = true;
+  try {
+    const seeds = P.queue.slice(Math.max(0, P.idx - 2), P.idx + 1).map((t) => t.id);
+    const exclude = P.queue.slice(-400).map((t) => t.id);
+    const r = await api('/radio', { json: { seeds, exclude, n: 20 } });
+    if (!r.tracks.length) return false;
+    r.tracks.forEach((t) => { t.radio = true; });
+    P.queue.push(...r.tracks);
+    if (P.original) P.original.push(...r.tracks);
+    renderQueue(); saveState(); pushState();
+    return true;
+  } catch { return false; } finally { radioBusy = false; }
+}
+async function startRadio(seedTracks, label) {
+  const seeds = seedTracks.filter(Boolean).slice(0, 5); if (!seeds.length) return;
+  try {
+    const r = await api('/radio', { json: { seeds: seeds.map((t) => t.id), exclude: seeds.map((t) => t.id), n: 30 } });
+    r.tracks.forEach((t) => { t.radio = true; });
+    playList([seeds[0], ...r.tracks], 0, { key: `radio:${seeds[0].id}`, label: label || `Rádio: ${seeds[0].title}` });
+    toast(label ? `${label}` : `Rádio a partir de «${seeds[0].title}»`);
+  } catch (e) { toast(e.message); }
+}
+
+// ------------------------------------------------------------------ Atalhos de playlists
+const SEL = { key: null, set: new Set(), last: -1 };
+function selectRow(row, listEl, e) {
+  const key = listEl?.dataset.list, i = +row.dataset.i;
+  const mod = e.ctrlKey || e.metaKey || e.shiftKey;
+  if (SEL.key !== key || !mod) { SEL.key = key; SEL.set = new Set([i]); }
+  else if (e.shiftKey && SEL.last >= 0) { for (let k = Math.min(SEL.last, i); k <= Math.max(SEL.last, i); k++) SEL.set.add(k); }
+  else if (SEL.set.has(i)) SEL.set.delete(i); else SEL.set.add(i);
+  SEL.last = i; paintSel();
+}
+function selTracks() { const l = lists[SEL.key]; return l ? [...SEL.set].sort((a, b) => a - b).map((i) => l.tracks[i]).filter(Boolean) : []; }
+function paintSel() {
+  $$('.tr.sel').forEach((r) => r.classList.remove('sel'));
+  const box = SEL.key && document.querySelector(`.tracks[data-list="${SEL.key}"]`);
+  if (box) SEL.set.forEach((i) => box.querySelector(`.tr[data-i="${i}"]`)?.classList.add('sel'));
+  const n = SEL.set.size;
+  $('#selbar').hidden = n < 2;
+  if (n >= 2) $('#sel-n').textContent = `${n} selecionadas`;
+}
+function clearSel() { if (!SEL.set.size) return; SEL.key = null; SEL.set = new Set(); SEL.last = -1; paintSel(); }
+
+async function addToPlaylist(pid, tracks, name) {
+  const r = await api(`/playlists/${pid}/tracks`, { json: { track_ids: tracks.map((t) => t.id) } });
+  toast(r.added ? `${r.added === 1 ? 'Adicionada' : r.added + ' adicionadas'} a ${name}${r.skipped ? ` · ${r.skipped} já lá ${r.skipped > 1 ? 'estavam' : 'estava'}` : ''}`
+    : `Já ${tracks.length > 1 ? 'estavam todas' : 'estava'} em ${name}`);
+  loadLibrary();
+  if (route.name === 'playlist' && +route.arg === +pid) refreshView();
+}
+async function createPlaylistWith(tracks, suggested) {
+  const name = await promptModal('Nova playlist', suggested || (tracks.length === 1 ? tracks[0].title : 'Nova playlist'));
+  if (!name) return null;
+  const p = await api('/playlists', { json: { name } });
+  if (tracks.length) await api(`/playlists/${p.id}/tracks`, { json: { track_ids: tracks.map((t) => t.id) } });
+  toast(tracks.length ? `Playlist «${name}» criada com ${plural(tracks.length, 'música', 'músicas')}` : `Playlist «${name}» criada`);
+  loadLibrary();
+  return p;
+}
+async function pickPlaylist(tracks) {
+  if (!tracks.length) return;
+  let pls;
+  try { pls = (await api('/playlists')).filter((p) => !p.synced); } catch (e) { return toast(e.message); }
+  const m = $('#modal');
+  const label = tracks.length === 1 ? esc(tracks[0].title) : plural(tracks.length, 'música', 'músicas');
+  m.innerHTML = `<div class="modal-card picker"><h3>Adicionar a uma playlist</h3><p class="dl-hint">${label}</p>
+    <div class="search-box pk-search">${icon('search')}<input id="pk-q" placeholder="Procurar ou dar nome a uma nova" autocomplete="off"></div>
+    <div class="pk-list" id="pk-list"></div>
+    <div class="row"><button class="ghost-btn" data-x>Fechar</button></div></div>`;
+  m.hidden = false;
+  const draw = (q = '') => {
+    const f = pls.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()));
+    $('#pk-list').innerHTML = `<button class="pk-item pk-new" data-pk="new"><span class="pk-ic">${icon('plus')}</span><span><b>${q ? `Criar «${esc(q)}»` : 'Nova playlist'}</b><small>com ${label}</small></span></button>`
+      + f.map((p) => `<button class="pk-item" data-pk="${p.id}" data-name="${esc(p.name)}">${playlistArt(p, 'pk-art')}<span><b>${esc(p.name)}</b><small>${plural(p.track_count, 'música', 'músicas')}</small></span></button>`).join('')
+      + (pls.length && !f.length ? '<p class="dl-hint" style="padding:8px 4px">Nenhuma playlist com esse nome.</p>' : '');
+  };
+  draw();
+  const qEl = $('#pk-q');
+  qEl.oninput = () => draw(qEl.value.trim());
+  qEl.onkeydown = (e) => { if (e.key === 'Enter') ($('#pk-list [data-pk]:not([data-pk="new"])') || $('#pk-list [data-pk="new"]')).click(); };
+  if (!isMobile()) qEl.focus();
+  $('[data-x]', m).onclick = closeModal;
+  $('#pk-list').onclick = async (e) => {
+    const b = e.target.closest('[data-pk]'); if (!b) return;
+    const q = qEl.value.trim();
+    closeModal();
+    if (b.dataset.pk !== 'new') return addToPlaylist(b.dataset.pk, tracks, b.dataset.name);
+    if (q) {   // nome já escrito na pesquisa: cria logo, sem perguntar outra vez
+      const p = await api('/playlists', { json: { name: q } });
+      await api(`/playlists/${p.id}/tracks`, { json: { track_ids: tracks.map((t) => t.id) } });
+      toast(`Playlist «${q}» criada com ${plural(tracks.length, 'música', 'músicas')}`); loadLibrary();
+    } else createPlaylistWith(tracks);
+  };
+}
+
+// arrastar músicas para as playlists da barra lateral (ou para o + para criar uma nova)
+let DRAG = null;
+const dropTarget = (e) => e.target.closest?.('.lib-item[href^="#/playlist/"], .lib-item[href="#/liked"], .lib-head [data-action="new-playlist"]');
+document.addEventListener('dragstart', (e) => {
+  const row = e.target.closest?.('.tr[data-id]'), listEl = row?.closest('.tracks[data-list]');
+  if (!row || !listEl) return;
+  const key = listEl.dataset.list, i = +row.dataset.i;
+  if (!(SEL.key === key && SEL.set.has(i))) { SEL.key = key; SEL.set = new Set([i]); SEL.last = i; paintSel(); }
+  DRAG = selTracks();
+  e.dataTransfer.effectAllowed = 'copy';
+  e.dataTransfer.setData('text/plain', DRAG.map((t) => `${t.artist} - ${t.title}`).join('\n'));
+  const g = document.createElement('div'); g.className = 'drag-ghost';
+  g.textContent = DRAG.length > 1 ? `${DRAG.length} músicas` : DRAG[0].title;
+  document.body.appendChild(g); e.dataTransfer.setDragImage(g, 12, 12); setTimeout(() => g.remove(), 0);
+  document.body.classList.add('dragging');
+});
+document.addEventListener('dragend', () => { DRAG = null; document.body.classList.remove('dragging'); $$('.drop-on').forEach((x) => x.classList.remove('drop-on')); });
+document.addEventListener('dragover', (e) => {
+  const t = DRAG && dropTarget(e); if (!t) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+  $$('.drop-on').forEach((x) => { if (x !== t) x.classList.remove('drop-on'); }); t.classList.add('drop-on');
+});
+document.addEventListener('dragleave', (e) => { const t = dropTarget(e); if (t && !t.contains(e.relatedTarget)) t.classList.remove('drop-on'); });
+document.addEventListener('drop', async (e) => {
+  const t = DRAG && dropTarget(e); if (!t) return;
+  e.preventDefault(); t.classList.remove('drop-on');
+  const tracks = DRAG; DRAG = null; clearSel();
+  if (t.matches('[data-action="new-playlist"]')) return createPlaylistWith(tracks);
+  if (t.getAttribute('href') === '#/liked') { for (const tr of tracks) if (!tr.liked) await setLike(tr, true); return; }
+  if (t.querySelector('.sync-ic')) return toast('Esta playlist é sincronizada com a original: as músicas adicionadas à mão seriam substituídas');
+  addToPlaylist(t.getAttribute('href').split('/').pop(), tracks, t.querySelector('.t').textContent);
+});
 
 // ------------------------------------------------------------------ Modo offline (Cache API + service worker)
 const OFF = { cache: 'pobrefy-audio-v1', meta: store.get('offline', {}), busy: false };
