@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import discover, downloader, lyrics, radio, scanner, sources, system
+from . import discover, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -670,6 +670,28 @@ async def lyrics_prefetch():
     if not lyrics.state["running"]:
         asyncio.get_running_loop().run_in_executor(None, lyrics.prefetch, None)
     return {"started": True}
+
+
+@app.get("/api/library/duplicates")
+async def library_duplicates():
+    """Grupos de músicas repetidas, com a cópia que se sugere manter."""
+    return await asyncio.to_thread(duplicates.find_groups)
+
+
+@app.post("/api/library/duplicates/remove")
+async def library_remove_duplicates(groups: list[dict] = Body(..., embed=True)):
+    r = await asyncio.to_thread(duplicates.remove, groups)
+    return {**r, "trash": duplicates.trash_info()}
+
+
+@app.get("/api/library/trash")
+def library_trash():
+    return duplicates.trash_info()
+
+
+@app.post("/api/library/trash/empty")
+def library_empty_trash():
+    return duplicates.empty_trash()
 
 
 @app.post("/api/radio")

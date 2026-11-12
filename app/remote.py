@@ -12,7 +12,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 log = logging.getLogger("remote")
 CMDS = {"toggle", "play", "pause", "next", "prev", "seek", "volume", "shuffle", "repeat",
-        "load", "enqueue", "transfer", "stop"}
+        "load", "enqueue", "transfer", "stop", "disconnect"}
 
 
 class Hub:

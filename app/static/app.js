@@ -401,6 +401,7 @@ function seekTo(t) { if (R.target) rc('seek', { t }); else if (current()) audio.
 function updateVolume() {
   setSlider($('#vol'), muted ? 0 : master);
   $('#btn-vol').innerHTML = icon(muted || master === 0 ? 'mute' : 'volume');
+  if (!R.target) updateVolLabels();
 }
 
 // fila
@@ -544,6 +545,8 @@ async function handleMenu(action, btn) {
   closeMenu(); if ($('#modal').dataset.sheet) closeModal();
   if (action === 'dev-select') selectDevice(btn.dataset.did);
   if (action === 'dev-rename') renameDevice();
+  if (action === 'dev-kick') kickDevice(btn.dataset.did);
+  if (action === 'dev-release' && R.target) { R.target = null; remoteChanged(); toast('Deixaste de controlar o outro dispositivo'); }
   if (action === 'offline') { if (tracks.every((t) => isOff(t.id))) removeOffline(tracks.map((t) => t.id)); else saveOffline(tracks); }
   if (action === 'radio') startRadio(tracks);
   if (action === 'pl-from') createPlaylistWith(tracks);
@@ -649,7 +652,7 @@ let route = { name: 'home' };
 const routes = [
   [/^\/?$/, 'home'], [/^\/search$/, 'search'], [/^\/library$/, 'library'], [/^\/album\/(\d+)$/, 'album'],
   [/^\/artist\/(\d+)$/, 'artist'], [/^\/playlist\/(\d+)$/, 'playlist'], [/^\/liked$/, 'liked'],
-  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/offline$/, 'offline'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
+  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/duplicates$/, 'duplicates'], [/^\/offline$/, 'offline'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
 ];
 
 async function render() {
@@ -680,6 +683,7 @@ async function heroColor(src) {
 
 function greeting() { const h = new Date().getHours(); return h < 6 ? 'Boa noite' : h < 13 ? 'Bom dia' : h < 20 ? 'Boa tarde' : 'Boa noite'; }
 
+const DUP = { groups: [] };
 const VIEWS = {
   async home() {
     const d = await api('/home');
@@ -896,6 +900,34 @@ const VIEWS = {
     dlTimer = setInterval(refreshJobs, 2000);
   },
 
+  async duplicates() {
+    view.innerHTML = `<div class="view-inner"><div class="set-wrap"><h1 class="page-title">Músicas repetidas</h1><div class="label">A analisar a biblioteca…</div></div></div>`;
+    const [d, trash] = await Promise.all([api('/library/duplicates'), api('/library/trash')]);
+    if (route.name !== 'duplicates') return;
+    DUP.groups = d.groups;
+    const info = (t) => [t.ext ? t.ext.toUpperCase() : '', t.lossless ? 'sem perdas' : t.bitrate ? `${t.bitrate} kbps` : '', t.size ? fmtBytes(t.size) : '', fmt(t.duration)].filter(Boolean).join(' · ');
+    const use = (t) => [t.plays ? plural(t.plays, 'reprodução', 'reproduções') : '', t.playlists ? plural(t.playlists, 'playlist', 'playlists') : '', t.liked ? '♥' : ''].filter(Boolean).join(' · ');
+    const cards = d.groups.map((g, gi) => `<section class="set-card dup-card" data-g="${gi}">
+        <div class="dup-head"><img src="${g.tracks[0].has_cover ? coverUrl(g.tracks[0].album_id) : '/static/icons/icon-192.png'}" alt="" loading="lazy">
+          <div><b>${esc(g.title)}</b><small>${esc(g.artist)} · ${g.tracks.length} cópias</small></div></div>
+        ${g.tracks.map((t) => `<label class="dup-row ${t.id === g.keep ? 'keep' : ''}">
+          <input type="radio" name="dup-${gi}" value="${t.id}" ${t.id === g.keep ? 'checked' : ''}>
+          <span class="dup-info"><b>${esc(info(t))}${t.id === g.keep ? ' <em class="dup-tag">sugerida</em>' : ''}${t.exists === false ? ' <em class="dup-tag bad">ficheiro em falta</em>' : ''}</b>
+            <small class="mono">${esc(t.path)}</small>${use(t) ? `<small>${esc(use(t))}</small>` : ''}</span>
+          <button class="icon-btn" data-action="dup-play" data-g="${gi}" data-tid="${t.id}" title="Ouvir esta cópia">${icon('play')}</button>
+          <span class="dup-state">${t.id === g.keep ? 'Fica' : 'Sai'}</span></label>`).join('')}
+      </section>`).join('');
+    view.innerHTML = `<div class="view-inner"><div class="set-wrap">
+      <h1 class="page-title">Músicas repetidas</h1>
+      <section class="set-card"><div class="set-row"><div class="lbl">
+        <b>${d.groups.length ? `${plural(d.groups.length, 'música aparece', 'músicas aparecem')} mais de uma vez` : 'Não há músicas repetidas'}</b>
+        <small>${d.groups.length ? `${plural(d.copies, 'cópia a mais', 'cópias a mais')}, ${fmtBytes(d.bytes)}. Escolhe a cópia que fica em cada música (já vem sugerida a de melhor qualidade). As playlists, os gostos e o histórico passam para ela. As outras vão para a pasta <code>.pobrefy-lixo</code>, dentro da pasta da música, e podes recuperá-las de lá.` : 'Cada música (mesmo título e artista, com duração parecida) só existe uma vez na biblioteca. Versões ao vivo ou remisturas com duração diferente não contam como repetidas.'}</small></div>
+        <div class="set-ctl">${d.groups.length ? `<button class="primary-btn sm" data-action="dup-remove" id="dup-go">Remover ${plural(d.copies, 'cópia', 'cópias')}</button>` : ''}<button class="ghost-btn" data-action="dup-rescan">Analisar de novo</button></div></div>
+        ${trash.files ? `<div class="set-row"><div class="lbl"><b>Lixo</b><small>${plural(trash.files, 'ficheiro', 'ficheiros')}, ${fmtBytes(trash.bytes)} em <code class="mono">${esc(trash.path)}</code></small></div>
+          <div class="set-ctl"><button class="ghost-btn" data-action="dup-empty">Esvaziar lixo</button></div></div>` : ''}
+      </section>${cards}</div></div>`;
+  },
+
   async settings() {
     const [{ values: v, options: o }, sys] = await Promise.all([api('/settings'), api('/system')]);
     S = { ...S, ...v };
@@ -940,6 +972,8 @@ const VIEWS = {
           `<button class="ghost-btn" data-action="set-rescan">Atualizar agora</button><button class="ghost-btn" data-action="set-rescan-full" title="Volta a ler as etiquetas de todos os ficheiros">Leitura completa</button>`)}
         ${row('Verificar a pasta automaticamente', 'Apanha ficheiros que copies à mão para a pasta de música.',
           `<select class="sel" data-set="auto_scan_min">${opt([[0, 'Nunca'], [15, 'A cada 15 minutos'], [60, 'A cada hora'], [360, 'A cada 6 horas'], [1440, 'Uma vez por dia']], v.auto_scan_min)}</select>`)}
+        ${row('Músicas repetidas', 'Procura músicas que existem mais de uma vez (mesmo título e artista, com duração parecida), mostra a qualidade de cada cópia e deixa-te escolher o que eliminar.',
+          `<a class="ghost-btn" href="#/duplicates">Analisar</a>`)}
         ${row('Letras', `${sys.lyrics.with_lyrics} de ${sys.lyrics.tracks} músicas têm letra (${sys.lyrics.synced} sincronizadas). As letras são procuradas ao tocar e depois de cada download, no LRCLIB.`,
           `<button class="ghost-btn" data-action="set-lyrics">Procurar letras em falta</button>`)}
       </section>
@@ -1163,6 +1197,11 @@ view.addEventListener('input', (e) => {
   if (el) $('#cf-val').textContent = +el.value ? el.value + ' s' : 'Desligado';
 });
 view.addEventListener('change', (e) => {
+  if (e.target.name?.startsWith('dup-')) {               // escolher a cópia que fica
+    const card = e.target.closest('.dup-card');
+    card.querySelectorAll('.dup-row').forEach((r) => { const k = r.querySelector('input').checked; r.classList.toggle('keep', k); r.querySelector('.dup-state').textContent = k ? 'Fica' : 'Sai'; });
+    return;
+  }
   const el = e.target.closest('[data-set]'); if (!el) return;
   const key = el.dataset.set;
   const val = el.type === 'checkbox' ? el.checked : el.type === 'range' || ['dl_threads', 'auto_scan_min', 'pl_sync_hours'].includes(key) ? +el.value : el.value;
@@ -1274,6 +1313,8 @@ setInterval(async () => {
 document.addEventListener('click', async (e) => {
   const lyLine = e.target.closest('.ly-line');
   if (lyLine) { seekTo(+lyLine.dataset.t); return; }
+  const vb = e.target.closest('[data-vol]');
+  if (vb) { e.preventDefault(); e.stopPropagation(); stepVolume(+vb.dataset.vol); return; }
   const mItem = e.target.closest('#menu [data-m], #modal [data-m]');
   if (mItem) { e.preventDefault(); handleMenu(mItem.dataset.m, mItem); return; }
   if (!menu.hidden && !e.target.closest('#menu')) closeMenu();
@@ -1339,6 +1380,23 @@ document.addEventListener('click', async (e) => {
       case 'sel-offline': { const ts = selTracks(); clearSel(); saveOffline(ts); break; }
       case 'sel-clear': clearSel(); break;
       case 'canvas-all': { const r = await api('/canvas/generate-all', { json: {} }); toast(r.queued ? `${r.queued} vídeos na fila: vão sendo criados em segundo plano` : 'Não há músicas novas para gerar'); break; }
+      case 'dup-play': { const g = DUP.groups[+a.dataset.g]; const t = g?.tracks.find((x) => x.id === +a.dataset.tid); if (t) playList([t], 0); break; }
+      case 'dup-rescan': render(); break;
+      case 'dup-remove': {
+        const plan = DUP.groups.map((g, gi) => { const keep = +($(`input[name="dup-${gi}"]:checked`)?.value || g.keep);
+          return { keep, remove: g.tracks.map((t) => t.id).filter((id) => id !== keep) }; });
+        const n = plan.reduce((k, g) => k + g.remove.length, 0);
+        if (!n || !(await confirmModal(`Remover ${plural(n, 'cópia', 'cópias')}?`, 'As playlists, os gostos e o histórico passam para a cópia que fica. Os ficheiros vão para a pasta .pobrefy-lixo e só são apagados de vez quando esvaziares o lixo.'))) break;
+        if (P.queue.length && plan.some((g) => g.remove.includes(current()?.id))) { killFade(); audio.pause(); }
+        const r = await api('/library/duplicates/remove', { json: { groups: plan } });
+        toast(`${plural(r.removed, 'cópia removida', 'cópias removidas')}${r.skipped ? ` · ${r.skipped} ignorada${r.skipped > 1 ? 's' : ''}` : ''}`);
+        loadLibrary(); render(); break;
+      }
+      case 'dup-empty': {
+        const t = await api('/library/trash');
+        if (!(await confirmModal('Esvaziar o lixo?', `${plural(t.files, 'ficheiro é apagado', 'ficheiros são apagados')} para sempre (${fmtBytes(t.bytes)}). Não dá para desfazer.`))) break;
+        await api('/library/trash/empty', { json: {} }); toast('Lixo esvaziado'); render(); break;
+      }
       case 'set-lyrics': await api('/lyrics/prefetch', { json: {} }); toast('A procurar letras em segundo plano…'); break;
       case 'set-archive': if (await confirmModal('Limpar o histórico de downloads?', 'O spotDL esquece o que já descarregou. A pasta e a biblioteca não são afetadas, mas músicas que apagaste podem voltar a ser descarregadas.')) { await api('/downloads/archive/clear', { json: {} }); toast('Histórico limpo'); render(); } break;
       case 'nf-menu': { const t = uiTrack(); if (t) trackMenu(e, [t]); break; }
@@ -1772,7 +1830,7 @@ let pushTimer = 0;
 function pushState() { clearTimeout(pushTimer); pushTimer = setTimeout(() => { if (R.ok) wsSend({ t: 'state', state: localState() }); }, 120); }
 
 function connectWs() {
-  if ((R.ws && R.ws.readyState <= 1) || !navigator.onLine) return;
+  if ((R.ws && R.ws.readyState <= 1) || !navigator.onLine || R.kicked) return;
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`);
   R.ws = ws;
   ws.onopen = () => {
@@ -1791,6 +1849,7 @@ function connectWs() {
     if (R.target) { R.target = null; remoteChanged(); }
     updateDevUi();
     if (R.retry === 1) fetch('/api/me').then((r) => r.json()).then((m) => { if (m.auth_enabled && !m.authed) showLogin(); }).catch(() => {});
+    if (R.kicked) return;                                 // foi desligado: só volta quando o utilizador mexer
     setTimeout(connectWs, Math.min(15000, 1000 * 2 ** R.retry++));
   };
   ws.onerror = () => {};
@@ -1814,7 +1873,7 @@ function remoteChanged() {
   clearInterval(R.tick);
   if (R.target) { R.tick = setInterval(renderRemote, 500); renderRemote(); }
   else { updateNow(); updateVolume(); updateModes(); LY.id = null; if (nowOpen()) loadExtras(); onTime(); }
-  updateDevUi(); markPlaying();
+  updateDevUi(); markPlaying(); updateVolLabels();
 }
 // a barra do player passa a mostrar (e a controlar) o dispositivo remoto
 function renderRemote() {
@@ -1838,7 +1897,7 @@ function renderRemote() {
   $('#t-cur').textContent = $('#nf-cur').textContent = fmt(pos);
   $('#t-dur').textContent = $('#nf-dur').textContent = fmt(dur);
   $('#mini-fill').style.width = (dur ? (pos / dur) * 100 : 0) + '%';
-  setSlider($('#vol'), s.vol ?? 0); $('#btn-vol').innerHTML = icon(!s.vol ? 'mute' : 'volume');
+  setSlider($('#vol'), s.vol ?? 0); $('#btn-vol').innerHTML = icon(!s.vol ? 'mute' : 'volume'); updateVolLabels();
   updateModes(); updateLikeButtons(); markPlaying();
   if (nowOpen()) { loadExtras(); syncLyrics(pos); }
 }
@@ -1862,6 +1921,7 @@ function applyLoad(a, from) {
 }
 function onCmd(m) {
   const a = m.args || {};
+  if (m.cmd === 'disconnect') { onKicked(m); return; }
   if (R.target && !['load', 'transfer'].includes(m.cmd)) return;   // a controlar outro dispositivo: ignora o resto
   switch (m.cmd) {
     case 'toggle': togglePlay(); break;
@@ -1870,13 +1930,46 @@ function onCmd(m) {
     case 'next': next(); break;
     case 'prev': prev(); break;
     case 'seek': if (current()) audio.currentTime = Math.max(0, +a.t || 0); break;
-    case 'volume': master = Math.max(0, Math.min(1, +a.v || 0)); muted = false; applyVolume(); updateVolume(); store.set('volume', master); pushState(); break;
+    case 'volume': master = Math.max(0, Math.min(1, +a.v || 0)); muted = false; applyVolume(); updateVolume(); updateVolLabels(); store.set('volume', master); pushState(); break;
     case 'shuffle': if (!!a.on !== P.shuffle) toggleShuffle(); break;
     case 'repeat': if (['off', 'all', 'one'].includes(a.mode)) { P.repeat = a.mode; store.set('repeat', P.repeat); updateModes(); pushState(); } break;
     case 'enqueue': if (Array.isArray(a.tracks)) addToQueue(a.tracks.slice(0, 200), !!a.next); break;
     case 'load': applyLoad(a, m.from); break;
     case 'transfer': if (a.to && a.to !== devId) transferTo(a.to); break;
   }
+}
+// volume por passos (botões − / +): no remoto manda o comando, aqui ajusta o volume deste dispositivo
+const volNow = () => (R.target ? +(remoteDev()?.state?.vol ?? 0) : muted ? 0 : master);
+function stepVolume(dir) {
+  const v = Math.round(Math.max(0, Math.min(1, volNow() + dir * 0.1)) * 10) / 10;
+  if (R.target) {
+    const d = remoteDev(); rc('volume', { v });
+    if (d?.state) d.state.vol = v;                       // mostra já; o estado real chega a seguir
+    renderRemote();
+  } else { master = v; muted = false; applyVolume(); updateVolume(); store.set('volume', master); pushState(); }
+  updateVolLabels();
+}
+function updateVolLabels() {
+  const pct = Math.round(volNow() * 100) + '%';
+  $$('.vol-pct').forEach((e) => { e.textContent = pct; });
+  const nv = $('.nf-vol'); if (nv) nv.hidden = !R.target && !volumeSupported;   // iPhone: só no modo remoto
+}
+function kickDevice(id) {
+  const d = R.devices.find((x) => x.id === id); if (!d || id === devId) return;
+  wsSend({ t: 'cmd', to: id, cmd: 'disconnect', args: { by: devName() } });
+  if (R.target === id) { R.target = null; remoteChanged(); }
+  R.devices = R.devices.filter((x) => x.id !== id); updateDevUi();
+  toast(`${d.name} foi desligado`);
+}
+// desligado por outro dispositivo: para de tocar e sai da rede até o utilizador voltar a mexer aqui
+function onKicked(m) {
+  const who = R.devices.find((d) => d.id === m.from)?.name || m.args?.by || 'outro dispositivo';
+  killFade(); audio.pause();
+  if (R.target) { R.target = null; remoteChanged(); }
+  R.kicked = true; try { R.ws?.close(); } catch { /* */ }
+  toast(`Desligado por ${who}. Toca no ecrã para voltar a ligar.`);
+  const back = () => { if (!R.kicked) return; R.kicked = false; R.retry = 0; connectWs(); };
+  setTimeout(() => document.addEventListener('pointerdown', back, { once: true }), 800);
 }
 function playBlocked(e) { if (e && e.name === 'NotAllowedError') toast('Toca uma vez neste ecrã para permitir o áudio'); }
 
@@ -1899,10 +1992,15 @@ function selectDevice(id) {
 function openDevices(ev) {
   const me = `<button class="dev-item ${!R.target ? 'on' : ''}" data-m="dev-select" data-did="${devId}">${icon(kindIcon(guessKind()), 'i k')}
     <span><b>Este dispositivo</b><small>${esc(devName())}${!R.target && !audio.paused ? ' · a tocar' : ''}</small></span></button>`;
-  const rows = others().map((d) => `<button class="dev-item ${R.target === d.id ? 'on' : ''}" data-m="dev-select" data-did="${d.id}">${icon(kindIcon(d.kind), 'i k')}
-    <span><b>${esc(d.name)}</b><small>${d.state?.track ? (d.state.playing ? 'A tocar: ' : 'Em pausa: ') + esc(d.state.track.title) : 'Disponível'}</small></span></button>`).join('');
+  const rows = others().map((d) => `<div class="dev-row"><button class="dev-item ${R.target === d.id ? 'on' : ''}" data-m="dev-select" data-did="${d.id}">${icon(kindIcon(d.kind), 'i k')}
+    <span><b>${esc(d.name)}</b><small>${d.state?.track ? (d.state.playing ? 'A tocar: ' : 'Em pausa: ') + esc(d.state.track.title) : 'Disponível'}</small></span></button>
+    <button class="dev-kick" data-m="dev-kick" data-did="${d.id}" title="Desligar ${esc(d.name)}" aria-label="Desligar ${esc(d.name)}">${icon('close')}</button></div>`).join('');
+  const rd = remoteDev();
+  const vol = `<div class="dev-vol"><span>${R.target ? `Volume em ${esc(rd?.name || '')}` : 'Volume deste dispositivo'}</span>
+    <button class="vol-step" data-vol="-1" aria-label="Baixar o volume">−</button><b class="vol-pct">${Math.round(volNow() * 100)}%</b><button class="vol-step" data-vol="1" aria-label="Subir o volume">+</button></div>`;
+  const stop = R.target ? `<button data-m="dev-release">${icon('devices')}Deixar de controlar ${esc(rd?.name || '')}</button>` : '';
   const empty = R.ok ? '<div class="label">Abre o Pobrefy noutro dispositivo (telemóvel, computador…) e ele aparece aqui para o controlares.</div>' : '<div class="label">Sem ligação ao servidor de dispositivos. A tentar de novo…</div>';
-  const html = `<div class="dev-head">Ligar a um dispositivo</div>${me}${rows || empty}<hr><button data-m="dev-rename">${icon('edit')}Mudar o nome deste dispositivo</button>`;
+  const html = `<div class="dev-head">Ligar a um dispositivo</div>${me}${rows || empty}${vol}<hr>${stop}<button data-m="dev-rename">${icon('edit')}Mudar o nome deste dispositivo</button>`;
   menuCtx = { tracks: [] };
   if (isMobile()) openSheet(html);
   else { const r = ev.target.closest('button')?.getBoundingClientRect(); openMenu(Math.max(8, (r?.right || innerWidth) - 280), innerHeight, html); }
@@ -1942,4 +2040,5 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { co
 window.addEventListener('hashchange', () => { render(); view.scrollTop = 0; closeNow(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 $('#player').classList.add('idle');
+updateVolLabels();
 boot();

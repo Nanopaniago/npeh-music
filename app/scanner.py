@@ -144,6 +144,7 @@ def scan(full=False):
         known = {r["path"]: r["mtime"] for r in conn.execute("SELECT path, mtime FROM tracks")}
         seen = set()
         for root, _dirs, files in os.walk(MUSIC_DIR):
+            _dirs[:] = [d for d in _dirs if not d.startswith(".")]   # ignora o lixo (.pobrefy-lixo) e pastas ocultas
             for fn in files:
                 p = Path(root) / fn
                 if p.suffix.lower() not in AUDIO_EXTS or fn.startswith("."):

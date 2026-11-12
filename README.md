@@ -8,7 +8,8 @@ O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietP
 - **Vídeos curtos (estilo Canvas)**: o Spotify não partilha os seus Canvas, por isso o Pobrefy cria um parecido para cada música. São 8 segundos do videoclipe oficial no YouTube, sem som, na vertical e em loop, e os vídeos parados são ignorados. No telemóvel ocupam o ecrã inteiro, como no Spotify. Um `canvas.mp4` na pasta do álbum, ou `Título.canvas.mp4` ao lado da música, tem prioridade.
 - **Playlists sincronizadas**: cola o link de uma playlist do Spotify ou do Deezer em Downloads. O Pobrefy cria a playlist, descarrega só o que falta e vigia a original de X em X horas: as músicas novas entram e as removidas saem.
 - **Offline**: guarda músicas, álbuns e playlists no dispositivo e toca sem internet.
-- **Dispositivos**: controla a reprodução de outro dispositivo (telemóvel ↔ computador), como o Spotify Connect.
+- **Dispositivos**: controla a reprodução de outro dispositivo (telemóvel ↔ computador), como o Spotify Connect. Sobe e baixa o volume dele (botões − / + no menu de dispositivos e no ecrã "Agora a tocar") e desliga um dispositivo da rede com o ✕: ele para de tocar e só volta a ligar quando alguém tocar no ecrã dele.
+- **Músicas repetidas**: em Configurações → Biblioteca → Analisar. Mostra cada música que existe mais de uma vez, com o formato, a qualidade, o tamanho e o uso de cada cópia, e sugere qual manter. As playlists, os gostos e o histórico passam para a cópia que fica e as outras vão para a pasta `.pobrefy-lixo` (dentro da pasta da música), de onde podes recuperá-las até esvaziares o lixo.
 - **Visual**: glow subtil na cor da música que está a tocar e animações suaves (desligam-se sozinhas com "reduzir movimento" no sistema).
 - **Reprodução contínua (rádio automática)**: quando a fila acaba, a música não para. O Pobrefy continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão, com as tuas mais tocadas a aparecer mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Também há "Iniciar rádio" numa música e "Rádio" num artista.
 - **Atalhos de playlists**: botão + em cada música, no player e nos álbuns, artistas e playlists. O seletor tem pesquisa e cria logo uma playlist com o nome que escreves. Há seleção múltipla (Ctrl/Cmd/Shift + clique) com uma barra de ações, podes arrastar músicas para uma playlist da barra lateral (ou para o + para criar uma nova) e há "Guardar a fila como playlist". As playlists nunca ficam com músicas repetidas.
@@ -105,6 +106,7 @@ docker compose up -d --build --pull always   # atualizar spotDL e as dependênci
 
 - Se puseres ficheiros manualmente na pasta, clica em **Atualizar biblioteca** no topo da app.
 - Se um download falhar, abre o **Registo** no cartão desse download. Na maioria dos casos basta reiniciar o container, para atualizar o yt-dlp, e tentar outra vez.
+- Músicas repetidas: Configurações → Biblioteca → **Analisar**. O que removeres fica em `.pobrefy-lixo` até carregares em **Esvaziar lixo**.
 - Cópia de segurança: a pasta `./data` guarda as playlists, os gostos e o histórico. A música está na tua pasta de música.
 
 ## Atalhos
@@ -121,6 +123,7 @@ app/
   main.py        API (biblioteca, streaming com Range, playlists, downloads, login)
   scanner.py     lê tags e capas com mutagen → SQLite
   downloader.py  fila de downloads do spotDL (um de cada vez)
+  duplicates.py  deteção e remoção de músicas repetidas (com lixo recuperável)
   db.py, config.py
   static/        interface (HTML/CSS/JS sem build), service worker, ícones
 ```
