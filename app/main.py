@@ -649,7 +649,7 @@ def scan_status():
 @app.get("/api/discover/search")
 async def discover_search(q: str, type: str = "track"):
     q = q.strip()
-    if type not in ("track", "album", "artist"):
+    if type not in ("track", "album", "artist", "playlist"):
         raise HTTPException(400, "Tipo inválido")
     if len(q) < 2:
         return {"items": []}
@@ -665,6 +665,14 @@ async def discover_album(aid: int):
         return await asyncio.to_thread(discover.album_detail, aid)
     except Exception as e:  # noqa
         raise HTTPException(502, f"Não foi possível abrir o álbum ({e})")
+
+
+@app.get("/api/discover/playlist/{pid}")
+async def discover_playlist(pid: int):
+    try:
+        return await asyncio.to_thread(discover.playlist_detail, pid)
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"Não foi possível abrir a playlist ({e})")
 
 
 @app.get("/api/discover/artist/{aid}")

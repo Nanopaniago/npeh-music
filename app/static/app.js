@@ -1003,7 +1003,7 @@ const VIEWS = {
       <div id="dl-warn"></div>
       <div class="dl-search">
         <div class="search-box dl-sbox">${icon('search')}<input id="dl-q" type="search" placeholder="Pesquisar música, álbum ou artista…" autocomplete="off" value="${esc(dl.q)}"></div>
-        <div class="seg" id="dl-type">${[['track', 'Músicas'], ['album', 'Álbuns'], ['artist', 'Artistas']].map(([k, l]) => `<button class="${dl.type === k ? 'active' : ''}" data-action="dl-type" data-type="${k}">${l}</button>`).join('')}</div>
+        <div class="seg" id="dl-type">${[['track', 'Músicas'], ['album', 'Álbuns'], ['artist', 'Artistas'], ['playlist', 'Playlists']].map(([k, l]) => `<button class="${dl.type === k ? 'active' : ''}" data-action="dl-type" data-type="${k}">${l}</button>`).join('')}</div>
       </div>
       <div id="dl-results"></div>
       <details class="dl-paste" id="dl-paste"><summary>Colar links do Spotify ou uma lista de músicas</summary>
@@ -1261,6 +1261,10 @@ const dlAlbumCard = (a, i) => `<div class="card dl-card" data-action="dl-open" d
   <div class="art">${dlImg(a.cover)}</div><div class="t">${esc(a.title)}</div>
   <div class="s">${esc(a.artist)}${a.year ? ' · ' + esc(a.year) : ''}${a.kind === 'single' ? ' · Single' : a.kind === 'ep' ? ' · EP' : ''}</div>
   <button class="dl-btn sm" data-action="dl-album-card" data-i="${i}">${icon('download')}<span>Descarregar</span></button></div>`;
+const dlPlaylistCard = (p, i) => `<div class="card dl-card" data-action="dl-open" data-kind="playlist" data-id="${p.id}">
+  <div class="art">${dlImg(p.cover)}</div><div class="t">${esc(p.title)}</div>
+  <div class="s">${p.owner ? esc(p.owner) + ' · ' : ''}${plural(p.tracks || 0, 'música', 'músicas')}</div>
+  <button class="dl-btn sm" data-action="dl-pl-import" data-i="${i}">${icon('refresh')}<span>Importar</span></button></div>`;
 const dlArtistCard = (a) => `<div class="card dl-card" data-action="dl-open" data-kind="artist" data-id="${a.id}">
   <div class="art">${dlImg(a.picture, 'round')}</div><div class="t">${esc(a.name)}</div><div class="s">Artista${a.fans ? ' · ' + a.fans.toLocaleString('pt-PT') + ' fãs' : ''}</div></div>`;
 
@@ -1273,6 +1277,7 @@ function renderDl() {
   else if (!dl.items.length) box.innerHTML = `<div class="empty"><h3>Nada encontrado para "${esc(dl.q)}"</h3><p>Tenta só o nome do artista, ou cola um link do Spotify mais abaixo.</p></div>`;
   else if (dl.type === 'track') { dl.tracks = dl.items; box.innerHTML = `<div class="dl-list">${dl.items.map(dlRow).join('')}</div>`; }
   else if (dl.type === 'album') { dl.albums = dl.items; box.innerHTML = `<div class="grid dl-grid">${dl.items.map(dlAlbumCard).join('')}</div>`; }
+  else if (dl.type === 'playlist') { dl.playlists = dl.items; box.innerHTML = `<div class="grid dl-grid">${dl.items.map(dlPlaylistCard).join('')}</div>`; }
   else box.innerHTML = `<div class="grid dl-grid">${dl.items.map(dlArtistCard).join('')}</div>`;
   markPreview();
 }
@@ -1281,6 +1286,17 @@ function renderDlDetail(box) {
   const back = '<button class="ghost-btn dl-back" data-action="dl-back">← Voltar</button>';
   if (v.loading) { box.innerHTML = back + dlSkeleton(5); return; }
   const d = v.data;
+  if (v.kind === 'playlist') {
+    dl.tracks = d.tracks_list;
+    const have = d.tracks_list.filter((t) => t.in_library).length;
+    box.innerHTML = `${back}<div class="dl-head">${dlImg(d.cover, 'dl-cover')}<div class="info">
+      <div class="kind">Playlist</div><h2>${esc(d.title)}</h2>
+      <div class="s">${d.owner ? esc(d.owner) + ' · ' : ''}${plural(d.tracks || d.tracks_list.length, 'música', 'músicas')}${have ? ` · ${have} já na biblioteca` : ''}</div>
+      <button class="primary-btn" data-action="dl-pl-import-open">${icon('refresh')} Importar playlist</button>
+      <p class="dl-hint" style="margin-top:10px">Cria a playlist no nPlay, descarrega as músicas que faltam (arrumadas por artista) e fica a acompanhar as novidades.</p></div></div>
+      <div class="dl-list">${d.tracks_list.map(dlRow).join('')}</div>`;
+    markPreview(); return;
+  }
   if (v.kind === 'album') {
     dl.tracks = d.tracks_list;
     const missing = d.tracks_list.filter((t) => !t.in_library && !t.pending && !dl.queued.has('t' + t.id)).length;
@@ -1588,6 +1604,8 @@ document.addEventListener('click', async (e) => {
       case 'dl-clear': await api('/downloads/clear', { json: {} }); refreshJobs(); break;
       case 'dl-type': dl.type = a.dataset.type; $$('#dl-type button').forEach((b) => b.classList.toggle('active', b === a)); dlSearch(); break;
       case 'dl-open': dlOpen(a.dataset.kind, a.dataset.id); break;
+      case 'dl-pl-import': { e.stopPropagation(); const p = dl.playlists?.[+a.dataset.i]; if (p) importPlaylist(p.url); break; }
+      case 'dl-pl-import-open': if (dl.view?.data?.url) importPlaylist(dl.view.data.url); break;
       case 'dl-back': stopPreview(); dl.view = dl.stack.pop() || null; renderDl(); break;
       case 'pv': togglePreview(dl.tracks[+a.dataset.i]); break;
       case 'dl-track': { const t = dl.tracks[+a.dataset.i]; dlQueue([t], `${t.title} — ${t.artist}`).catch((err) => toast(err.message)); break; }

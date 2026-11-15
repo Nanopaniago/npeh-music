@@ -85,6 +85,17 @@ def mark_library(tracks):
     return tracks
 
 
+def _playlist(p):
+    return {
+        "id": p.get("id"),
+        "title": p.get("title", ""),
+        "cover": p.get("picture_big") or p.get("picture_medium") or p.get("picture"),
+        "owner": (p.get("user") or p.get("creator") or {}).get("name", ""),
+        "tracks": p.get("nb_tracks"),
+        "url": f"https://www.deezer.com/playlist/{p.get('id')}",
+    }
+
+
 # ---------------------------------------------------------------- API usada pelo servidor
 def search(q, kind="track", limit=24):
     data = _get(f"/search/{kind}", {"q": q, "limit": limit})["data"]
@@ -92,7 +103,18 @@ def search(q, kind="track", limit=24):
         return mark_library([_track(t) for t in data if t.get("id")])
     if kind == "album":
         return [_album(a) for a in data if a.get("id")]
+    if kind == "playlist":
+        return [_playlist(p) for p in data if p.get("id")]
     return [_artist(a) for a in data if a.get("id")]
+
+
+def playlist_detail(pid):
+    p = _get(f"/playlist/{int(pid)}")
+    out = _playlist(p)
+    items = (p.get("tracks") or {}).get("data") or []
+    out["description"] = p.get("description") or ""
+    out["tracks_list"] = mark_library([_track(t) for t in items if t.get("id") and t.get("readable", True)])
+    return out
 
 
 def album_detail(aid):
