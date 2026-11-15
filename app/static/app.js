@@ -1,4 +1,4 @@
-/* Pobrefy — SPA sem build step */
+/* nPlay (Pobrefy) — SPA sem build step */
 'use strict';
 
 // ------------------------------------------------------------------ utils
@@ -53,21 +53,23 @@ function toast(msg) {
 
 // ------------------------------------------------------------------ arte
 const coverUrl = (albumId) => `/api/cover/${albumId}`;
+// capas que faltam: gradientes da paleta nPlay, sempre o mesmo para o mesmo item
+const pal = (k) => `pal-${[...String(k ?? '')].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 6}`;
 function art(albumId, has, cls = '') {
   return has && albumId
     ? `<img src="${coverUrl(albumId)}" class="${cls}" loading="lazy" alt="">`
-    : `<div class="ph ${cls}">${icon('note')}</div>`;
+    : `<div class="ph ${pal(albumId)} ${cls}">${icon('note')}</div>`;
 }
 function artistArt(a, cls = '') {
   return a.cover_album
     ? `<img src="${coverUrl(a.cover_album)}" class="round ${cls}" loading="lazy" alt="">`
-    : `<div class="ph round ${cls}">${icon('user')}</div>`;
+    : `<div class="ph round ${pal(a.id || a.name)} ${cls}">${icon('user')}</div>`;
 }
 function playlistArt(p, cls = '') {
   const c = p.covers || [];
   if (c.length >= 4) return `<div class="mosaic ${cls}">${c.slice(0, 4).map((id) => `<img src="${coverUrl(id)}" loading="lazy" alt="">`).join('')}</div>`;
   if (c.length) return `<img src="${coverUrl(c[0])}" class="${cls}" loading="lazy" alt="">`;
-  return `<div class="ph ${cls}">${icon('note')}</div>`;
+  return `<div class="ph ${pal('pl' + p.id)} ${cls}">${icon('note')}</div>`;
 }
 const likedArt = (cls = '') => `<div class="liked-cover ${cls}">${icon('heart-fill')}</div>`;
 
@@ -948,19 +950,19 @@ const VIEWS = {
           ? 'Mistura o fim de uma música com o início da seguinte. Com 0 fica desligado.'
           : 'Este dispositivo (iPhone/iPad) não deixa o browser controlar o volume, por isso o crossfade não está disponível aqui.',
           `<input type="range" class="rng" min="0" max="12" step="1" value="${v.crossfade}" data-set="crossfade" ${volumeSupported ? '' : 'disabled'}><span class="rng-val" id="cf-val">${v.crossfade ? v.crossfade + ' s' : 'Desligado'}</span>`)}
-        ${row('Reprodução contínua (rádio automática)', 'Quando a fila acaba, a música não para: o Pobrefy continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão. As tuas mais tocadas aparecem mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Desliga-se com "repetir" ativo.',
+        ${row('Reprodução contínua (rádio automática)', 'Quando a fila acaba, a música não para: o nPlay continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão. As tuas mais tocadas aparecem mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Desliga-se com "repetir" ativo.',
           `<input type="checkbox" class="chk" data-set="autoplay" ${v.autoplay ? 'checked' : ''}>`)}
       </section>
 
       <section class="set-card"><h2>Vídeos curtos</h2>
-        ${row('Gerar vídeos curtos automaticamente', `O Spotify não partilha os seus Canvas. O Pobrefy cria um parecido: 8 segundos do videoclipe oficial no YouTube, sem som, na vertical e em loop. Vídeos parados (lyric videos, capas fixas) são ignorados e aí a capa anima-se sozinha. Também podes pôr o teu: <code>canvas.mp4</code> na pasta do álbum ou <code>Título.canvas.mp4</code> ao lado da música.`,
+        ${row('Gerar vídeos curtos automaticamente', `O Spotify não partilha os seus Canvas. O nPlay cria um parecido: 8 segundos do videoclipe oficial no YouTube, sem som, na vertical e em loop. Vídeos parados (lyric videos, capas fixas) são ignorados e aí a capa anima-se sozinha. Também podes pôr o teu: <code>canvas.mp4</code> na pasta do álbum ou <code>Título.canvas.mp4</code> ao lado da música.`,
           `<input type="checkbox" class="chk" data-set="canvas_auto" ${v.canvas_auto ? 'checked' : ''}>`)}
         ${row('Na biblioteca', `${sys.canvas.ok} músicas com vídeo · ${sys.canvas.none} sem videoclipe utilizável${sys.canvas.queued ? ` · ${sys.canvas.queued} na fila` : ''}. Os vídeos novos são criados quando tocas uma música e depois de cada download.`,
           `<button class="ghost-btn" data-action="canvas-all">Gerar para toda a biblioteca</button>`)}
       </section>
 
       <section class="set-card"><h2>Playlists sincronizadas</h2>
-        ${row('Verificar as playlists originais', `Cola o link de uma playlist do Spotify ou do Deezer em Downloads (ou em + Importar). O Pobrefy cria a playlist, descarrega só o que falta e fica a vigiá-la: músicas novas entram, as removidas saem. ${sys.synced ? plural(sys.synced, 'playlist sincronizada', 'playlists sincronizadas') + '.' : ''}`,
+        ${row('Verificar as playlists originais', `Cola o link de uma playlist do Spotify ou do Deezer em Downloads (ou em + Importar). O nPlay cria a playlist, descarrega só o que falta e fica a vigiá-la: músicas novas entram, as removidas saem. ${sys.synced ? plural(sys.synced, 'playlist sincronizada', 'playlists sincronizadas') + '.' : ''}`,
           `<select class="sel" data-set="pl_sync_hours">${opt([[1, 'A cada hora'], [3, 'A cada 3 horas'], [6, 'A cada 6 horas'], [12, 'A cada 12 horas'], [24, 'Uma vez por dia']], v.pl_sync_hours)}</select>`)}
       </section>
 
@@ -1004,7 +1006,7 @@ const VIEWS = {
 
       <section class="set-card"><h2>Dispositivos</h2>
         ${row('Nome deste dispositivo', 'É o nome que os outros dispositivos veem quando escolhes onde tocar.', `<span class="mono" style="font-size:13px">${esc(devName())}</span><button class="ghost-btn" data-action="dev-rename">Mudar</button>`)}
-        ${row('Ligados agora', R.ok ? (others().length ? others().map((d) => esc(d.name)).join(' · ') : 'Nenhum outro dispositivo. Abre o Pobrefy noutro ecrã para o controlares daqui (e vice-versa).') : 'Sem ligação ao servidor de dispositivos.', `<span class="rng-val">${others().length}</span>`)}
+        ${row('Ligados agora', R.ok ? (others().length ? others().map((d) => esc(d.name)).join(' · ') : 'Nenhum outro dispositivo. Abre o nPlay noutro ecrã para o controlares daqui (e vice-versa).') : 'Sem ligação ao servidor de dispositivos.', `<span class="rng-val">${others().length}</span>`)}
       </section>
 
       <section class="set-card"><h2>Sistema</h2>
@@ -1225,7 +1227,7 @@ async function searchResults(q) {
      <button class="primary-btn" data-action="download-more" data-q="${esc(q)}">Descarregar "${esc(q.length > 40 ? q.slice(0, 40) + '…' : q)}"</button></div>`;
   if (/^https?:\/\/(open\.)?spotify\.com\//.test(q) || /^spotify:/.test(q) || isPlaylistLink(q)) {
     box.innerHTML = isPlaylistLink(q)
-      ? `<div class="dl-box"><h2>Playlist detetada</h2><p>O Pobrefy cria esta playlist, descarrega as músicas que faltam e mantém-na sincronizada com a original.</p>
+      ? `<div class="dl-box"><h2>Playlist detetada</h2><p>O nPlay cria esta playlist, descarrega as músicas que faltam e mantém-na sincronizada com a original.</p>
         <button class="primary-btn" data-action="import-pl" data-q="${esc(q)}">Importar e sincronizar</button></div>`
       : `<div class="dl-box"><h2>Link do Spotify detetado</h2><p>Queres descarregar isto para a tua biblioteca?</p>
       <button class="primary-btn" data-action="download-more" data-q="${esc(q)}">Descarregar</button></div>`;
@@ -1999,7 +2001,7 @@ function openDevices(ev) {
   const vol = `<div class="dev-vol"><span>${R.target ? `Volume em ${esc(rd?.name || '')}` : 'Volume deste dispositivo'}</span>
     <button class="vol-step" data-vol="-1" aria-label="Baixar o volume">−</button><b class="vol-pct">${Math.round(volNow() * 100)}%</b><button class="vol-step" data-vol="1" aria-label="Subir o volume">+</button></div>`;
   const stop = R.target ? `<button data-m="dev-release">${icon('devices')}Deixar de controlar ${esc(rd?.name || '')}</button>` : '';
-  const empty = R.ok ? '<div class="label">Abre o Pobrefy noutro dispositivo (telemóvel, computador…) e ele aparece aqui para o controlares.</div>' : '<div class="label">Sem ligação ao servidor de dispositivos. A tentar de novo…</div>';
+  const empty = R.ok ? '<div class="label">Abre o nPlay noutro dispositivo (telemóvel, computador…) e ele aparece aqui para o controlares.</div>' : '<div class="label">Sem ligação ao servidor de dispositivos. A tentar de novo…</div>';
   const html = `<div class="dev-head">Ligar a um dispositivo</div>${me}${rows || empty}${vol}<hr>${stop}<button data-m="dev-rename">${icon('edit')}Mudar o nome deste dispositivo</button>`;
   menuCtx = { tracks: [] };
   if (isMobile()) openSheet(html);

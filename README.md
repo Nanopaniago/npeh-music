@@ -1,4 +1,4 @@
-# Pobrefy
+# nPlay by Digital NPEH (Pobrefy)
 
 O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietPi.
 
@@ -10,7 +10,7 @@ O Downtify e o Swing Music numa só app, ao estilo Spotify, alojada no teu DietP
 - **Offline**: guarda músicas, álbuns e playlists no dispositivo e toca sem internet.
 - **Dispositivos**: controla a reprodução de outro dispositivo (telemóvel ↔ computador), como o Spotify Connect. Sobe e baixa o volume dele (botões − / + no menu de dispositivos e no ecrã "Agora a tocar") e desliga um dispositivo da rede com o ✕: ele para de tocar e só volta a ligar quando alguém tocar no ecrã dele.
 - **Músicas repetidas**: em Configurações → Biblioteca → Analisar. Mostra cada música que existe mais de uma vez, com o formato, a qualidade, o tamanho e o uso de cada cópia, e sugere qual manter. As playlists, os gostos e o histórico passam para a cópia que fica e as outras vão para a pasta `.pobrefy-lixo` (dentro da pasta da música), de onde podes recuperá-las até esvaziares o lixo.
-- **Visual**: glow subtil na cor da música que está a tocar e animações suaves (desligam-se sozinhas com "reduzir movimento" no sistema).
+- **Visual**: identidade nPlay (logo nova; paleta Klein Blue, Citric, Aquamarine, Fuchsia e Tangerine sobre fundo escuro), glow subtil na cor da música que está a tocar e animações suaves (desligam-se sozinhas com "reduzir movimento" no sistema).
 - **Reprodução contínua (rádio automática)**: quando a fila acaba, a música não para. O Pobrefy continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão, com as tuas mais tocadas a aparecer mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Também há "Iniciar rádio" numa música e "Rádio" num artista.
 - **Atalhos de playlists**: botão + em cada música, no player e nos álbuns, artistas e playlists. O seletor tem pesquisa e cria logo uma playlist com o nome que escreves. Há seleção múltipla (Ctrl/Cmd/Shift + clique) com uma barra de ações, podes arrastar músicas para uma playlist da barra lateral (ou para o + para criar uma nova) e há "Guardar a fila como playlist". As playlists nunca ficam com músicas repetidas.
 - **Streaming**: início, pesquisa, álbuns, artistas, playlists, "Músicas de que gostas", fila, aleatório, repetir, crossfade e controlos no ecrã de bloqueio.
