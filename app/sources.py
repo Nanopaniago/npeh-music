@@ -43,14 +43,14 @@ def parse_url(url: str):
 
 
 # ---------------------------------------------------------------- leitura da fonte
-def _fetch_spotify(url):
-    """Usa o `spotdl save`: lê a playlist sem descarregar nada (e sem procurar letras)."""
+def _spotify_save(url):
+    """`spotdl save`: lê a playlist inteira sem descarregar nada (pode ser lento com o limite da API do Spotify)."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "pl.spotdl"
         cmd = ["spotdl", "save", url, "--save-file", str(out), "--lyrics", "--threads", "4"]
         if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
             cmd += ["--client-id", SPOTIFY_CLIENT_ID, "--client-secret", SPOTIFY_CLIENT_SECRET]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=tmp)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=tmp)
         if not out.exists():
             tail = (r.stdout + r.stderr).strip().splitlines()[-3:]
             raise RuntimeError(" ".join(tail)[-300:] or "o spotDL não devolveu músicas")
@@ -58,6 +58,54 @@ def _fetch_spotify(url):
     name = next((s.get("list_name") for s in songs if s.get("list_name")), None)
     items = [{"title": s.get("name") or "", "artist": ", ".join(s.get("artists") or []) or s.get("artist") or "",
               "duration": s.get("duration"), "query": s.get("url") or ""} for s in songs if s.get("name")]
+    return name, items
+
+
+RE_SP_ID = re.compile(r"playlist[/:]([A-Za-z0-9]{22})")
+
+
+def _spotify_embed(url):
+    """Leitura rápida pela página pública de incorporação do Spotify (até 100 músicas, sem limites da API)."""
+    m = RE_SP_ID.search(url)
+    if not m:
+        raise RuntimeError("link do Spotify inválido")
+    req = urllib.request.Request(f"https://open.spotify.com/embed/playlist/{m.group(1)}",
+                                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        html = r.read().decode("utf-8", "replace")
+    j = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
+    if not j:
+        raise RuntimeError("a página do Spotify mudou")
+    ent = json.loads(j.group(1))["props"]["pageProps"]["state"]["data"]["entity"]
+    items = []
+    for t in ent.get("trackList") or []:
+        tid = (t.get("uri") or "").split(":")[-1]
+        if not t.get("title") or t.get("entityType", "track") != "track":
+            continue
+        items.append({"title": t["title"], "artist": t.get("subtitle") or "",
+                      "duration": round((t.get("duration") or 0) / 1000) or None,
+                      "query": f"https://open.spotify.com/track/{tid}" if tid else ""})
+    return ent.get("name") or ent.get("title"), items
+
+
+def _fetch_spotify(url):
+    """Primeiro a leitura rápida (embed); se a playlist tiver mais de 100 músicas, completa com o spotDL."""
+    name, items = None, []
+    try:
+        name, items = _spotify_embed(url)
+    except Exception as e:  # noqa
+        log.info("embed do Spotify falhou (%s); a usar o spotDL", e)
+    if len(items) >= 100 or not items:
+        try:
+            n2, full = _spotify_save(url)
+            if len(full) > len(items):
+                name, items = n2 or name, full
+        except Exception as e:  # noqa
+            if not items:
+                raise
+            log.warning("spotDL save falhou (%s); a usar as primeiras %s músicas", e, len(items))
+    if not items:
+        raise RuntimeError("o Spotify não devolveu músicas")
     return name, None, items
 
 
