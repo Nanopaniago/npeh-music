@@ -5,14 +5,20 @@ As opções (formato, qualidade, pasta, estrutura) vêm das Configurações.
 """
 import asyncio
 import logging
+import os
 import re
 import shlex
 import shutil
+import subprocess
 import time
+from pathlib import Path
+
+import mutagen
 
 from . import dedupe, lyrics, scanner
 from . import settings as app_settings
-from .config import DATA_DIR, SPOTDL_EXTRA_ARGS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
+from . import catalog
+from .config import AUDIO_EXTS, DATA_DIR, MUSIC_DIR, SPOTDL_EXTRA_ARGS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 from .db import get_conn, row
 
 log = logging.getLogger("downloader")
@@ -21,6 +27,10 @@ queue: "asyncio.Queue[int]" = asyncio.Queue()
 _current = {"job_id": None, "proc": None}
 _loop = None
 ARCHIVE = DATA_DIR / "spotdl-archive.txt"   # URLs do Spotify já descarregados (travão extra contra repetidos)
+# Os downloads acontecem numa pasta escondida dentro da pasta da música (o scanner ignora pastas com ".").
+# Só depois de verificado (descodifica até ao fim e tem a duração certa) é que o ficheiro entra na biblioteca.
+STAGING = MUSIC_DIR / ".nplay-staging"
+ATTEMPTS = 3          # tentativas por job para as músicas que chegarem incompletas
 
 RE_FOUND = re.compile(r"Found (\d+) songs?", re.I)
 RE_DONE = re.compile(r'^\s*(Downloaded|Skipping)\b', re.I)
@@ -51,7 +61,20 @@ def _append_log(job_id, line):
     conn.commit()
 
 
-def build_cmd(queries, s):
+_help = {}
+
+
+def _supports(flag):
+    """Algumas opções só existem em versões recentes do spotDL: confirma na ajuda antes de as usar."""
+    if "text" not in _help:
+        try:
+            _help["text"] = subprocess.run(["spotdl", "download", "--help"], capture_output=True, text=True, timeout=60).stdout
+        except Exception:  # noqa
+            _help["text"] = ""
+    return flag in _help["text"]
+
+
+def build_cmd(queries, s, archive=None):
     fmt = s["dl_format"]
     if fmt == "original":
         # stream original do YouTube (Opus), copiado sem reconverter = melhor qualidade possível
@@ -67,8 +90,13 @@ def build_cmd(queries, s):
         "--threads", str(s["dl_threads"]),
         "--simple-tui",
         "--overwrite", "skip",
-        "--archive", str(ARCHIVE),
+        "--archive", str(archive or ARCHIVE),
     ]
+    # o yt-dlp volta a tentar ligações que caem a meio (a causa das músicas "cortadas")
+    if _supports("--yt-dlp-args"):
+        cmd += ["--yt-dlp-args", "--retries 15 --fragment-retries 15 --retry-sleep 3"]
+    if _supports("--max-retries"):
+        cmd += ["--max-retries", "5"]
     if bitrate:
         cmd += ["--bitrate", bitrate]
     if s["dl_lyrics"]:
@@ -149,6 +177,102 @@ def _finalize_items(job_id: int, job_status: str):
     conn.commit()
 
 
+# ---------------------------------------------------------------- verificação dos ficheiros
+def _probe_duration(path: Path):
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                           capture_output=True, text=True, timeout=60)
+        return float(r.stdout.strip())
+    except Exception:  # noqa
+        return None
+
+
+def _decoded_seconds(path: Path):
+    """Descodifica o ficheiro todo e devolve quantos segundos de áudio tem de facto (None = erro).
+    Um ficheiro cortado pode manter no cabeçalho a duração original: só a descodificação diz a verdade."""
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-nostats", "-i", str(path), "-map", "0:a:0",
+                            "-f", "null", "-progress", "pipe:1", "-"], capture_output=True, text=True, timeout=600)
+    except Exception:  # noqa
+        return None
+    if r.returncode != 0 or r.stderr.strip():
+        return None
+    us = [int(l.split("=", 1)[1]) for l in r.stdout.splitlines() if l.startswith("out_time_us=") and l.split("=", 1)[1].strip().lstrip("-").isdigit()]
+    return max(us) / 1e6 if us else None
+
+
+def _tags(path: Path):
+    try:
+        f = mutagen.File(path, easy=True)
+        t = f.tags if f is not None else None
+        first = lambda k: str((t.get(k) or [""])[0]) if t else ""  # noqa
+        return first("artist").replace(";", ", "), first("title")
+    except Exception:  # noqa
+        return "", ""
+
+
+def _expected(job_id, artist, title):
+    """Duração esperada: a do pedido (pesquisa no Deezer) ou, para links, a do Deezer."""
+    key = dedupe.key_for(artist, title)
+    r = get_conn().execute("SELECT duration FROM dl_items WHERE job_id=? AND key=? AND duration IS NOT NULL",
+                           (job_id, key)).fetchone()
+    if r:
+        return r[0]
+    try:
+        return catalog.lookup_duration(artist, title)
+    except Exception:  # noqa
+        return None
+
+
+def verify_file(job_id, path: Path):
+    """-> (ok, motivo). Rejeita ficheiros que não descodificam até ao fim ou que ficaram mais curtos."""
+    header = _probe_duration(path)
+    if not header:
+        return False, "não tem áudio legível"
+    dur = _decoded_seconds(path)
+    if dur is None:
+        return False, "está corrompido ou cortado"
+    if dur < header * 0.95 - 1.5:
+        return False, f"tem {int(dur)} s de áudio de {int(header)} s"
+    artist, title = _tags(path)
+    exp = _expected(job_id, artist, title) if artist and title else None
+    if exp and dur < exp * 0.93 - 2:
+        return False, f"tem {int(dur)} s de {int(exp)} s"
+    if not exp and dur < 15:
+        return False, f"tem só {int(dur)} s"
+    return True, ""
+
+
+def _audio_files(root: Path):
+    return [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
+
+
+def _sidecars(p: Path):
+    return [x for x in (p.with_suffix(".lrc"), Path(str(p) + ".lrc")) if x.exists()]
+
+
+def _publish(job_id, stage: Path, dest_root: Path):
+    """Move os ficheiros verificados para a biblioteca, mantendo a estrutura Artista/Álbum."""
+    lib = dedupe.library_index()
+    moved = dupes = 0
+    for p in _audio_files(stage):
+        rel = p.relative_to(stage)
+        dest = dest_root / rel
+        artist, title = _tags(p)
+        exists = dest.exists() or (artist and title and dedupe.status(title, artist, _probe_duration(p), lib, set()) == "library")
+        if exists:                       # já existe na biblioteca: não cria cópias
+            for x in [p, *_sidecars(p)]:
+                x.unlink(missing_ok=True)
+            dupes += 1
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        for x in _sidecars(p):
+            shutil.move(str(x), str(dest_root / x.relative_to(stage)))
+        shutil.move(str(p), str(dest))
+        moved += 1
+    return moved, dupes
+
+
 def _split(query: str):
     # um "-" no início seria lido como opção pelo spotDL
     return [q.strip().lstrip("-").strip() for q in query.split("\n") if q.strip().lstrip("-").strip()]
@@ -170,44 +294,93 @@ async def _run_job(job_id: int):
     s = app_settings.get_all()
     workdir = app_settings.download_path(s)
     workdir.mkdir(parents=True, exist_ok=True)
-    cmd = build_cmd(queries, s)
+    stage = STAGING / f"job-{job_id}"
+    shutil.rmtree(stage, ignore_errors=True)        # restos de uma tentativa interrompida
+    stage.mkdir(parents=True, exist_ok=True)
+    job_archive = stage / ".archive.txt"
+    base_archive = ARCHIVE.read_text() if ARCHIVE.exists() else ""
     _append_log(job_id, f"→ pasta: {workdir}")
     _append_log(job_id, f"→ {len(queries)} pedido(s), formato {s['dl_format']}"
                 + ("" if s["dl_format"] in app_settings.LOSSLESS else f" {s['dl_bitrate']}"))
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=str(workdir),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-    )
-    _current.update(job_id=job_id, proc=proc)
     multi_search = len(queries) > 1
     total = len(queries) if multi_search else 0
     if total:
         _update(job_id, total=total)
     done = failed = 0
-    async for raw in proc.stdout:
-        line = raw.decode(errors="replace").rstrip()
-        if not line.strip():
-            continue
-        _append_log(job_id, line)
-        if not multi_search and (m := RE_FOUND.search(line)):
-            total = max(total, int(m.group(1)))
-        elif RE_DONE.search(line):
-            done += 1
-        elif RE_FAIL.search(line):
-            failed += 1
-        _update(job_id, done=done, failed=failed, total=max(total, done + failed))
-    rc = await proc.wait()
-    _current.update(job_id=None, proc=None)
-    current = row("SELECT status FROM jobs WHERE id=?", (job_id,))
-    if current and current["status"] == "cancelled":
+    rc = 0
+    verified, bad = set(), {}
+    for attempt in range(1, ATTEMPTS + 1):
+        # o histórico volta ao estado de antes do job: as músicas rejeitadas são descarregadas outra vez,
+        # as que já passaram na verificação ficam na pasta e o spotDL salta-as
+        job_archive.write_text(base_archive)
+        cmd = build_cmd(queries, s, job_archive)
+        if attempt > 1:
+            _append_log(job_id, f"→ tentativa {attempt} de {ATTEMPTS} para {len(bad)} música(s) incompleta(s)")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=str(stage),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        _current.update(job_id=job_id, proc=proc)
+        att_done = att_failed = 0
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            if not line.strip():
+                continue
+            _append_log(job_id, line)
+            if not multi_search and (m := RE_FOUND.search(line)):
+                total = max(total, int(m.group(1)))
+            elif RE_DONE.search(line):
+                att_done += 1
+            elif RE_FAIL.search(line):
+                att_failed += 1
+            if attempt == 1:
+                done, failed = att_done, att_failed
+                _update(job_id, done=done, failed=failed, total=max(total, done + failed))
+        rc = await proc.wait()
+        _current.update(job_id=None, proc=None)
+        if (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled":
+            break
+        # verificação de cada ficheiro novo: só passa o que está completo
+        bad = {}
+        for p in _audio_files(stage):
+            rel = str(p.relative_to(stage))
+            if rel in verified:
+                continue
+            ok, why = await asyncio.to_thread(verify_file, job_id, p)
+            if ok:
+                verified.add(rel)
+            else:
+                bad[rel] = why
+                _append_log(job_id, f"✗ {rel}: {why} — apagado")
+                for x in [p, *_sidecars(p)]:
+                    x.unlink(missing_ok=True)
+        if not bad:
+            break
+    cancelled = (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled"
+    if cancelled:
+        shutil.rmtree(stage, ignore_errors=True)
         status = "cancelled"
-    elif rc == 0 and (done > 0 or failed == 0):
-        status = "done" if failed == 0 else "partial"
     else:
-        status = "failed"
+        moved, dupes = await asyncio.to_thread(_publish, job_id, stage, workdir)
+        if not bad and job_archive.exists():      # só guarda no histórico quando tudo chegou completo
+            extra = [l for l in job_archive.read_text().splitlines() if l.strip() and l not in set(base_archive.splitlines())]
+            if extra:
+                with ARCHIVE.open("a") as f:
+                    f.write("\n".join(extra) + "\n")
+        shutil.rmtree(stage, ignore_errors=True)
+        _append_log(job_id, f"✓ {moved} música(s) verificada(s) e organizada(s)"
+                    + (f" · {dupes} já existia(m)" if dupes else "")
+                    + (f" · {len(bad)} sem versão completa" if bad else ""))
+        if bad:
+            failed = max(failed, len(bad))
+            done = max(0, done - len(bad))
+        if rc == 0 and (done > 0 or failed == 0 or moved):
+            status = "done" if failed == 0 else "partial"
+        else:
+            status = "failed"
     if status in ("done", "partial") and multi_search and total > done + failed:
         done = total - failed          # as restantes já existiam (o spotDL ignorou-as) — contam como concluídas
-    _update(job_id, status=status, done=done, finished_at=int(time.time()))
+    _update(job_id, status=status, done=done, failed=failed, finished_at=int(time.time()))
     # incorpora as faixas novas na biblioteca, fecha os registos e procura letras em falta
     await asyncio.to_thread(scanner.scan)
     _finalize_items(job_id, status)
@@ -223,6 +396,7 @@ async def worker():
     global _loop
     _loop = asyncio.get_running_loop()
     conn = get_conn()
+    shutil.rmtree(STAGING, ignore_errors=True)    # downloads a meio de um reinício nunca chegam à biblioteca
     # retoma jobs interrompidos por um reinício
     for r in conn.execute("SELECT id FROM jobs WHERE status IN ('queued','running') ORDER BY id").fetchall():
         conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (r[0],))

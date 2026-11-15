@@ -815,3 +815,56 @@ html { scrollbar-color: #ffffff26 transparent; }
   .panel.main { background: linear-gradient(180deg, #17122a 0, var(--bg) 320px); }
 }
 .login-card input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px #7f3aef33; outline: none; }
+
+/* =====================================================================
+   Organização: géneros, lançamentos recentes, artista
+   ===================================================================== */
+.page-title.sm { font-size: 22px; margin: 32px 0 14px; }
+.genre-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+.genre-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 14px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; }
+.genre-tile { position: relative; overflow: hidden; aspect-ratio: 1.6; border-radius: 10px; padding: 14px 16px; background: var(--gc);
+  display: flex; flex-direction: column; isolation: isolate; transition: transform .2s, box-shadow .3s;
+  box-shadow: inset 0 0 0 1px #ffffff14; }
+.genre-tile::before { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(135deg, transparent 40%, #00000040); }
+.genre-tile b { font-size: 19px; font-weight: 800; letter-spacing: -.01em; line-height: 1.15; max-width: 75%; }
+.genre-tile small { font-size: 12px; opacity: .8; margin-top: 4px; font-weight: 600; }
+.genre-tile img { position: absolute; right: -14px; bottom: -8px; width: 46%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; transform: rotate(22deg); box-shadow: 0 6px 18px #00000066; z-index: -1; transition: transform .3s; }
+.genre-tile:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1px #ffffff26, 0 10px 30px color-mix(in srgb, var(--gc) 35%, transparent); }
+.genre-tile:hover img { transform: rotate(16deg) scale(1.06); }
+.genre-badge { width: 232px; height: 232px; border-radius: 8px; display: grid; place-items: center; flex: none; box-shadow: 0 8px 40px #00000099, 0 0 80px color-mix(in srgb, var(--hero) 50%, transparent); }
+.genre-badge .i { width: 40%; height: 40%; }
+.genre-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.genre-chips a { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 99px; background: color-mix(in srgb, var(--gc) 30%, #00000066); border: 1px solid color-mix(in srgb, var(--gc) 60%, transparent); }
+.genre-chips a:hover { background: color-mix(in srgb, var(--gc) 50%, #00000066); }
+.new-tag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--ink); background: var(--accent); padding: 1px 6px; border-radius: 4px; margin-right: 6px; vertical-align: 1px; }
+.artist-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); padding: 6px 10px; border-radius: 99px; background: #ffffff0d; }
+.artist-mode .i { width: 14px; height: 14px; color: var(--accent); }
+.latest-wrap { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 24px; align-items: start; }
+.latest { display: flex; gap: 16px; align-items: center; padding: 14px; border-radius: 10px; background: linear-gradient(135deg, #4100f526, #ffffff08); border: 1px solid #ffffff12; transition: background .2s; }
+.latest:hover { background: linear-gradient(135deg, #4100f540, #ffffff10); }
+.latest > img, .latest > .ph { width: 112px; height: 112px; border-radius: 6px; flex: none; object-fit: cover; box-shadow: 0 8px 24px #00000080; }
+.latest small { display: block; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+.latest b { display: block; font-size: 20px; font-weight: 800; line-height: 1.2; }
+.latest span { display: block; font-size: 13px; color: var(--muted); margin-top: 6px; }
+.latest-list h2 { font-size: 18px; margin: 0 0 6px; }
+.rel-card .art { position: relative; }
+.rel-card.have .art img { filter: saturate(.6) brightness(.75); }
+.rel-have { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; background: #000000b3; padding: 4px 8px; border-radius: 99px; color: var(--aqua); }
+.rel-have .i { width: 12px; height: 12px; }
+.rel-card .fab.dl { opacity: 1; transform: none; }
+@media (max-width: 760px) {
+  .latest-wrap { grid-template-columns: 1fr; gap: 12px; }
+  .genre-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .genre-tile b { font-size: 16px; }
+  .genre-badge { width: 160px; height: 160px; }
+}
+
+/* volume no ecrã "Agora a tocar" (telemóvel): barra larga */
+.nf-vol { display: flex; align-items: center; gap: 10px; margin: 6px 0 14px; }
+.nf-vol[hidden] { display: none; }
+.nf-vol .slider { flex: 1; }
+.nf-vol .vol-step { width: 36px !important; height: 36px; background: transparent !important; color: #ffffffb3 !important; }
+.nf-vol .vol-step .i { width: 20px; height: 20px; }
+.nf-vol .vol-pct { min-width: 40px; text-align: right; }
+.artist-mode { white-space: nowrap; flex: none; }
+@media (max-width: 760px) { .artist-mode > span { display: none; } .artist-mode { padding: 8px; } }

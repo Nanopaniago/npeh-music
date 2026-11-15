@@ -159,6 +159,14 @@ def init_db():
     if "genre" not in tcols:   # versões anteriores não guardavam o género: obriga a reler as etiquetas uma vez
         conn.execute("ALTER TABLE tracks ADD COLUMN genre TEXT")
         migrated.add("genre")
+    for col, decl in (("genre_group", "TEXT"), ("release_date", "TEXT"), ("enriched", "INTEGER DEFAULT 0")):
+        if col not in tcols:      # organização por género e data de lançamento
+            conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {decl}")
+            migrated.add(col)
+    if "release_date" not in {r[1] for r in conn.execute("PRAGMA table_info(albums)")}:
+        conn.execute("ALTER TABLE albums ADD COLUMN release_date TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre_group)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_release ON tracks(release_date)")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     if "label" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN label TEXT")

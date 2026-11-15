@@ -71,6 +71,19 @@ function playlistArt(p, cls = '') {
   if (c.length) return `<img src="${coverUrl(c[0])}" class="${cls}" loading="lazy" alt="">`;
   return `<div class="ph ${pal('pl' + p.id)} ${cls}">${icon('note')}</div>`;
 }
+// géneros: cada família tem uma combinação fixa da paleta
+const GENRE_PAL = ['#4100f5', '#f037a5', '#ff4632', '#7f3aef', '#0aa88f', '#c8ff2e', '#9bf0e1', '#e8115b', '#2d46b9', '#ff8a3d'];
+const genreColor = (name) => GENRE_PAL[[...String(name)].reduce((h, c) => (h * 33 + c.charCodeAt(0)) >>> 0, 5) % GENRE_PAL.length];
+const genreInk = (c) => (['#c8ff2e', '#9bf0e1'].includes(c) ? 'var(--ink)' : '#fff');
+const genreTile = (g) => { const c = genreColor(g.name); return `<a class="genre-tile" href="#/genre/${encodeURIComponent(g.name)}" style="--gc:${c};color:${genreInk(c)}">
+  <b>${esc(g.name)}</b><small>${plural(g.tracks, 'música', 'músicas')}</small>${g.covers?.[0] ? `<img src="${coverUrl(g.covers[0])}" alt="" loading="lazy">` : ''}</a>`; };
+const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+function fmtRelease(d) {
+  if (!d) return '';
+  const [y, m, day] = String(d).split('-');
+  return day ? `${+day} ${MESES[+m - 1]} ${y}` : m ? `${MESES[+m - 1]} ${y}` : y;
+}
+function isNew(d) { if (!d || String(d).length < 7) return false; return Date.now() - new Date(String(d).length === 7 ? d + '-01' : d).getTime() < 1000 * 86400 * 120; }
 const likedArt = (cls = '') => `<div class="liked-cover ${cls}">${icon('heart-fill')}</div>`;
 
 async function dominantColor(src) {
@@ -128,6 +141,25 @@ function shuffleArr(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) {
 
 function playList(tracks, start = 0, ctx = null, forceShuffle = null) {
   if (!tracks.length) return toast('Não há músicas para tocar');
+  const artistMode = !!ctx?.key?.startsWith('artist:');
+  if (artistMode && !ctx.full) {
+    // a lista no ecrã (populares, recentes) é só uma parte: vai buscar todas as músicas do artista
+    const id = ctx.key.split(':')[1], clicked = tracks[start];
+    api(`/artists/${id}/tracks`).then((all) => {
+      const i = all.findIndex((t) => t.id === clicked?.id);
+      playList(all.length ? all : tracks, all.length ? Math.max(0, i) : start, { ...ctx, full: true }, forceShuffle);
+    }).catch(() => playList(tracks, start, { ...ctx, full: true }, forceShuffle));
+    return;
+  }
+  if (artistMode) {
+    // tocar um artista = todas as músicas dele, em ordem aleatória e em loop (a música nunca para)
+    if (!P.artistMode) P.repeatBefore = P.repeat;
+    P.artistMode = true; P.repeat = 'all'; store.set('repeat', 'all');
+    if (forceShuffle === null) { P.shuffle = true; store.set('shuffle', true); }
+    updateModes();
+  } else if (P.artistMode) {
+    P.artistMode = false; P.repeat = P.repeatBefore || 'off'; store.set('repeat', P.repeat); updateModes();
+  }
   if (forceShuffle !== null) { P.shuffle = forceShuffle; store.set('shuffle', P.shuffle); }
   P.ctx = ctx; P.manual = 0;
   if (P.shuffle) {
@@ -148,6 +180,7 @@ function load(autoplay = true, at = 0) {
   if (!t) return;
   P.counted = false;
   killFade();
+  clearTimeout(REC.timer); REC.timer = 0; REC.tries = 0; REC.lastT = at || 0; REC.lastMove = Date.now(); REC.resumeAt = null;
   audio.src = `/api/stream/${t.id}`;
   if (at) audio.addEventListener('loadedmetadata', () => { audio.currentTime = at; }, { once: true });
   if (autoplay) audio.play().catch(playBlocked);
@@ -198,7 +231,7 @@ function startCrossfade(nextIdx, secs) {
   P.idx = nextIdx; P.counted = false;
   inn.src = `/api/stream/${current().id}`;
   inn.muted = muted; inn.volume = 0;
-  audio = inn;
+  audio = inn; REC.lastT = 0; REC.tries = 0; REC.lastMove = Date.now();
   inn.play().catch(() => {});
   xf.el = out;
   const t0 = performance.now(), dur = Math.max(600, secs * 1000);
@@ -236,6 +269,7 @@ function cycleRepeat() {
   const cur = R.target ? remoteDev()?.state?.repeat || 'off' : P.repeat;
   const nxt = { off: 'all', all: 'one', one: 'off' }[cur];
   if (R.target) return rc('repeat', { mode: nxt });
+  P.artistMode = false;                                  // escolha manual: deixa de ser automática
   P.repeat = nxt;
   store.set('repeat', P.repeat); updateModes(); pushState();
 }
@@ -346,18 +380,69 @@ function onTime() {
     }
   }
 }
+// ------------------------------------------------------------------ a música nunca para por conta própria
+// Falhas de rede (Cloudflare, Wi-Fi ↔ dados), ficheiros a ser lidos pelo servidor, buffers que encravam:
+// em vez de saltar ou parar, volta a pedir o áudio e continua no mesmo segundo.
+const REC = { tries: 0, timer: 0, lastT: 0, lastMove: Date.now(), resumeAt: null };
+P.want = false;                                       // o utilizador quer ouvir (play) — só uma pausa dele o desliga
+function recover(reason) {
+  const t = current();
+  if (!t || R.target || REC.timer) return;
+  const pos = REC.resumeAt ?? Math.max(audio.currentTime || 0, REC.lastT || 0);
+  REC.resumeAt = pos;
+  if (!navigator.onLine && !isOff(t.id)) {           // sem rede: espera por ela e continua
+    window.addEventListener('online', () => recover('online'), { once: true });
+    return;
+  }
+  REC.tries++;
+  const wait = Math.min(10000, 500 * 2 ** Math.min(REC.tries - 1, 5));
+  console.info('[nPlay] a retomar', reason, 'em', pos.toFixed(1), 's (tentativa', REC.tries + ')');
+  REC.timer = setTimeout(async () => {
+    REC.timer = 0;
+    if (current() !== t) return;
+    if (REC.tries > 4) {                              // confirma se a música ainda existe no servidor
+      try {
+        const r = await fetch(`/api/stream/${t.id}`, { headers: { Range: 'bytes=0-1' } });
+        if (r.status === 404) { REC.tries = 0; toast('Esta música já não existe no servidor — a passar à seguinte'); next(true); return; }
+      } catch { /* sem rede: tenta outra vez */ }
+    }
+    audio.src = `/api/stream/${t.id}`;
+    audio.addEventListener('loadedmetadata', () => { try { if (pos > 0.5) audio.currentTime = pos; } catch { /* */ } }, { once: true });
+    if (pos <= 0.5) REC.resumeAt = null;
+    audio.play().catch(playBlocked);
+  }, wait);
+}
+setInterval(() => {   // vigia: a tocar mas parada há mais de 12 s (buffer encravado)
+  if (!P.want || audio.paused || !current() || R.target || REC.timer || xf.el) return;
+  if (Date.now() - REC.lastMove > 12000 && audio.readyState < 3) recover('encravada');
+}, 4000);
+
 function bindAudio(el) {
-  el.addEventListener('play', () => { if (el !== audio) return; if (PV.key) { PV.resume = false; stopPreview(); } markPlaying(); pushState(); });
-  el.addEventListener('pause', () => { if (el === audio) { markPlaying(); saveState(); pushState(); } });
+  el.addEventListener('play', () => { if (el !== audio) return; P.want = true; REC.lastMove = Date.now(); if (PV.key) { PV.resume = false; stopPreview(); } markPlaying(); pushState(); });
+  el.addEventListener('pause', () => { if (el === audio) { if (!REC.timer && !el.ended && !el.error) P.want = false; markPlaying(); saveState(); pushState(); } });
   el.addEventListener('seeked', () => { if (el === audio) pushState(); });
   el.addEventListener('loadedmetadata', () => { if (el === audio) pushState(); });
-  el.addEventListener('ended', () => { if (el === audio) next(true); });
+  el.addEventListener('ended', () => {
+    if (el !== audio) return;
+    // terminou antes do fim real (ligação cortada a meio do envio): retoma em vez de saltar
+    const full = current()?.duration || 0;
+    if (full > 10 && el.currentTime < full - 4 && REC.tries < 6) { P.want = true; recover('terminou cedo'); return; }
+    next(true);
+  });
   el.addEventListener('error', () => {
     if (el !== audio || !el.getAttribute('src') || !current()) return;
-    toast('Não foi possível tocar esta faixa — a saltar');
-    setTimeout(() => next(), 800);
+    P.want = true; recover('erro ' + (el.error?.code || ''));
   });
-  el.addEventListener('timeupdate', () => { if (el === audio) onTime(); });
+  el.addEventListener('timeupdate', () => {
+    if (el !== audio) return;
+    if (REC.resumeAt != null) {                        // a retomar: só conta depois de voltar ao segundo certo
+      if (el.currentTime < REC.resumeAt - 0.5) { onTime(); return; }
+      REC.resumeAt = null;
+    }
+    if (el.currentTime > REC.lastT + 0.2 || el.currentTime < REC.lastT - 1) { REC.lastMove = Date.now(); if (el.currentTime > REC.lastT + 3) REC.tries = 0; }
+    if (!el.seeking) REC.lastT = el.currentTime;
+    onTime();
+  });
 }
 els.forEach(bindAudio);
 if ('mediaSession' in navigator) {
@@ -396,8 +481,8 @@ for (const id of ['#seek', '#nf-seek']) {
   });
 }
 makeSlider($('#vol'), {
-  onInput: (f) => { if (R.target) { rc('volume', { v: f }); return; } master = f; muted = false; applyVolume(); updateVolume(); },
-  onCommit: () => { if (!R.target) { store.set('volume', master); pushState(); } },
+  onInput: (f) => setVolumeTo(f),
+  onCommit: (f) => setVolumeTo(f, true),
 });
 function seekTo(t) { if (R.target) rc('seek', { t }); else if (current()) audio.currentTime = t; }
 function updateVolume() {
@@ -469,7 +554,7 @@ function card({ href, artHtml, title, sub, playCtx, round = false }) {
     <div class="art">${artHtml}${playCtx ? `<button class="fab" data-action="play-ctx" data-play-ctx="${playCtx}" aria-label="Reproduzir">${icon('play')}</button>` : ''}</div>
     <div class="t" ${round ? 'style="text-align:left"' : ''}>${esc(title)}</div><div class="s">${sub}</div></div>`;
 }
-const albumCard = (a) => card({ href: `#/album/${a.id}`, artHtml: art(a.id, a.has_cover), title: a.title, sub: `${esc(a.year || '')}${a.year ? ' • ' : ''}${esc(a.artist)}`, playCtx: `album:${a.id}` });
+const albumCard = (a) => card({ href: `#/album/${a.id}`, artHtml: art(a.id, a.has_cover), title: a.title, sub: `${isNew(a.release_date) ? '<span class="new-tag">Novo</span>' : ''}${esc((a.release_date || a.year || '').slice(0, 4))}${a.release_date || a.year ? ' • ' : ''}${esc(a.artist)}`, playCtx: `album:${a.id}` });
 const artistCard = (a) => card({ href: `#/artist/${a.id}`, artHtml: artistArt(a), title: a.name, sub: 'Artista', playCtx: `artist:${a.id}`, round: true });
 const playlistCard = (p) => card({ href: `#/playlist/${p.id}`, artHtml: playlistArt(p), title: p.name, sub: `${p.synced ? `<span class="sync-ic" title="Sincronizada">${icon('refresh')}</span>` : ''}Playlist • ${plural(p.track_count, 'música', 'músicas')}`, playCtx: `playlist:${p.id}` });
 const trackCard = (t, key, i) => `<div class="card" data-action="play-from" data-list="${key}" data-i="${i}">
@@ -485,7 +570,8 @@ async function ctxTracks(key) {
   const [kind, id] = key.split(':');
   if (kind === 'album') { const a = await api(`/albums/${id}`); return { tracks: a.tracks, ctx: { key, label: a.title, href: `#/album/${id}` } }; }
   if (kind === 'playlist') { const p = await api(`/playlists/${id}`); return { tracks: p.tracks, ctx: { key, label: p.name, href: `#/playlist/${id}` } }; }
-  if (kind === 'artist') { const a = await api(`/artists/${id}`); const all = await api(`/artists/${id}/tracks`); return { tracks: all, ctx: { key, label: a.name, href: `#/artist/${id}` } }; }
+  if (kind === 'artist') { const a = await api(`/artists/${id}`); const all = await api(`/artists/${id}/tracks`); return { tracks: all, ctx: { key, label: a.name, href: `#/artist/${id}`, full: true } }; }
+  if (kind === 'genre') { const name = key.slice(6); const g = await api(`/genres/${encodeURIComponent(name)}`); return { tracks: g.tracks, ctx: { key, label: name, href: `#/genre/${encodeURIComponent(name)}` } }; }
   if (kind === 'liked') return { tracks: await api('/liked'), ctx: { key, label: 'Músicas de que gostas', href: '#/liked' } };
   if (kind === 'offline') return { tracks: Object.values(OFF.meta).sort((x, y) => y.at - x.at), ctx: { key, label: 'Offline', href: '#/offline' } };
   if (kind === 'all') return { tracks: await api('/tracks?limit=5000'), ctx: { key, label: 'Todas as músicas', href: '#/songs' } };
@@ -494,6 +580,7 @@ async function ctxTracks(key) {
 async function playCtx(key, shuffle = null) {
   if (P.ctx?.key === key && current() && shuffle === null) { togglePlay(); return; }
   const { tracks, ctx } = await ctxTracks(key);
+  if (key.startsWith('artist:') && shuffle === null) { playList(tracks, 0, ctx, true); toast(`${ctx.label}: todas as músicas, aleatório e em loop`); return; }
   playList(tracks, 0, ctx, shuffle);
 }
 
@@ -654,7 +741,7 @@ let route = { name: 'home' };
 const routes = [
   [/^\/?$/, 'home'], [/^\/search$/, 'search'], [/^\/library$/, 'library'], [/^\/album\/(\d+)$/, 'album'],
   [/^\/artist\/(\d+)$/, 'artist'], [/^\/playlist\/(\d+)$/, 'playlist'], [/^\/liked$/, 'liked'],
-  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/duplicates$/, 'duplicates'], [/^\/offline$/, 'offline'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
+  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/duplicates$/, 'duplicates'], [/^\/genres$/, 'genres'], [/^\/genre\/(.+)$/, 'genre'], [/^\/offline$/, 'offline'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
 ];
 
 async function render() {
@@ -663,7 +750,7 @@ async function render() {
   for (const [re, n] of routes) { const m = path.match(re); if (m) { name = n; arg = m[1]; break; } }
   if (!navigator.onLine && name !== 'offline') { if (location.hash !== '#/offline') { location.hash = '#/offline'; return; } name = 'offline'; }
   route = { name, arg, params: new URLSearchParams(qs || '') };
-  $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === name));
+  $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === (name === 'genre' ? 'genres' : name)));
   $('#search-box').hidden = name !== 'search';
   highlightLib(); closeMenu();
   view.style.removeProperty('--hero'); $('#topbar').style.removeProperty('--topbar-bg');
@@ -681,6 +768,19 @@ async function heroColor(src) {
   if (!src) return;
   const c = await dominantColor(src);
   if (c) { view.style.setProperty('--hero', c); $('#topbar').style.setProperty('--topbar-bg', `color-mix(in srgb, ${c} 45%, #121212)`); }
+}
+
+// últimos lançamentos do artista (Deezer), com os que faltam prontos a descarregar
+const REL = { list: [] };
+async function loadArtistReleases(id) {
+  let r; try { r = await api(`/artists/${id}/releases`); } catch { return; }
+  const box = $('#artist-releases'); if (!box || route.name !== 'artist' || route.arg !== String(id) || !r.releases?.length) return;
+  REL.list = r.releases;
+  const missing = r.releases.filter((x) => !x.in_library).length;
+  box.innerHTML = section(missing ? `Novos lançamentos · ${missing} por descarregar` : 'Lançamentos', `<div class="grid row">${r.releases.map((al, i) => `
+    <div class="card rel-card ${al.in_library ? 'have' : ''}">
+      <div class="art">${dlImg(al.cover)}${al.in_library ? `<span class="rel-have">${icon('check')}Na biblioteca</span>` : `<button class="fab dl" data-action="rel-dl" data-i="${i}" title="Descarregar">${icon('download')}</button>`}</div>
+      <div class="t">${esc(al.title)}</div><div class="s">${isNew(al.release_date) ? '<span class="new-tag">Novo</span>' : ''}${esc(fmtRelease(al.release_date))} · ${esc(al.kind === 'single' ? 'Single' : al.kind === 'ep' ? 'EP' : 'Álbum')}</div></div>`).join('')}</div>`);
 }
 
 function greeting() { const h = new Date().getHours(); return h < 6 ? 'Boa noite' : h < 13 ? 'Bom dia' : h < 20 ? 'Boa tarde' : 'Boa noite'; }
@@ -705,6 +805,8 @@ const VIEWS = {
       const k = registerList(d.recently_played, { key: 'recent', label: 'Tocadas recentemente' });
       html += section('Tocadas recentemente', `<div class="grid row">${d.recently_played.map((t, i) => trackCard(t, k, i)).join('')}</div>`);
     }
+    if (d.new_releases?.length) html += section('Lançamentos recentes', `<div class="grid row">${d.new_releases.map(albumCard).join('')}</div>`, '#/albums?sort=release');
+    if (d.genres?.length > 1) html += section('Os teus géneros', `<div class="genre-row">${d.genres.slice(0, 8).map(genreTile).join('')}</div>`, '#/genres');
     html += section('Adicionados recentemente', `<div class="grid row">${d.recent_albums.map(albumCard).join('')}</div>`, '#/albums');
     if (d.top_tracks.length >= 3) html += section('As mais ouvidas este mês', trackTable(d.top_tracks.slice(0, 5), { key: 'top', label: 'As mais ouvidas' }, { head: false }));
     html += section('Os teus artistas', `<div class="grid row">${d.artists.map(artistCard).join('')}</div>`, '#/artists');
@@ -765,25 +867,62 @@ const VIEWS = {
     heroColor(src);
   },
 
+  async genres() {
+    const gs = await api('/genres');
+    view.innerHTML = `<div class="view-inner"><h1 class="page-title">Géneros</h1>
+      ${gs.length ? `<div class="genre-grid">${gs.map(genreTile).join('')}</div>` : '<div class="label">Ainda não há músicas na biblioteca.</div>'}
+      <p class="dl-hint" style="margin-top:20px">Cada música é arrumada numa família de géneros a partir das etiquetas do ficheiro e do Deezer. As músicas novas são organizadas sozinhas, poucos segundos depois do download.</p></div>`;
+  },
+
+  async genre(name) {
+    name = decodeURIComponent(name);
+    const g = await api(`/genres/${encodeURIComponent(name)}`);
+    const c = genreColor(name);
+    const ctx = { key: `genre:${name}`, label: name, href: `#/genre/${encodeURIComponent(name)}` };
+    view.innerHTML = `
+      <div class="hero genre-hero" style="--hero:${c}"><div class="genre-badge" style="background:${c};color:${genreInk(c)}">${icon('note')}</div><div style="min-width:0">
+        <div class="kind">Género</div><h1 class="${name.length > 20 ? 'long' : ''}">${esc(name)}</h1>
+        <div class="sub">${plural(g.track_count, 'música', 'músicas')}<span class="dot">${plural(g.artists.length, 'artista', 'artistas')}</span></div></div></div>
+      <div class="action-bar">
+        <button class="play-big" data-action="play-ctx" data-play-ctx="${esc(ctx.key)}">${icon('play')}</button>
+        <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="${esc(ctx.key)}" title="Aleatório">${icon('shuffle')}</button>
+      </div>
+      <div class="content">
+        ${g.artists.length ? section('Artistas', `<div class="grid row">${g.artists.map(artistCard).join('')}</div>`) : ''}
+        ${g.albums.length ? section('Lançamentos mais recentes', `<div class="grid row">${g.albums.map(albumCard).join('')}</div>`) : ''}
+        ${section('Músicas, das mais novas para as mais antigas', trackTable(g.tracks.slice(0, 300), ctx))}
+      </div>`;
+    view.style.setProperty('--hero', c);
+    $('#topbar').style.setProperty('--topbar-bg', `color-mix(in srgb, ${c} 45%, #121118)`);
+  },
+
   async artist(id) {
     const a = await api(`/artists/${id}`);
     const ctx = { key: `artist:${id}`, label: a.name, href: `#/artist/${id}` };
     view.innerHTML = `
       <div class="hero">${artistArt(a, 'hero-cover')}<div style="min-width:0">
         <div class="kind">Artista</div><h1 class="${a.name.length > 24 ? 'long' : ''}">${esc(a.name)}</h1>
-        <div class="sub">${plural(a.track_count, 'música', 'músicas')} na biblioteca</div></div></div>
+        <div class="sub">${plural(a.track_count, 'música', 'músicas')} na biblioteca</div>
+        ${a.genres?.length ? `<div class="genre-chips">${a.genres.map((g) => `<a href="#/genre/${encodeURIComponent(g)}" style="--gc:${genreColor(g)}">${esc(g)}</a>`).join('')}</div>` : ''}</div></div>
       <div class="action-bar">
         <button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
-        <button class="icon-btn ${P.shuffle ? 'on' : ''}" data-action="shuffle-ctx" data-key="${ctx.key}" title="Aleatório">${icon('shuffle')}</button>
+        <span class="artist-mode" title="Ao tocar um artista, o nPlay toca todas as músicas dele em ordem aleatória e repete em loop">${icon('shuffle')}${icon('repeat')}<span>Tudo, aleatório e em loop</span></span>
         ${a.top_tracks.length ? `<button class="ghost-btn with-ic" data-action="artist-radio" data-name="${esc(a.name)}">${icon('radio')}Rádio</button>${addBtn}` : ''}
         <button class="ghost-btn" data-action="download-more" data-q="${esc(a.name)}">Descarregar mais</button>
       </div>
       <div class="content">
+        ${a.latest ? `<section class="section latest-wrap">
+          <a class="latest" href="#/album/${a.latest.id}">${art(a.latest.id, a.latest.has_cover)}
+            <div><small>${isNew(a.latest.release_date) ? '<span class="new-tag">Novo</span>' : ''}Último lançamento</small><b>${esc(a.latest.title)}</b>
+            <span>${esc(fmtRelease(a.latest.release_date || a.latest.year))} · ${plural(a.latest.track_count, 'música', 'músicas')}</span></div></a>
+          <div class="latest-list"><h2>Mais recentes</h2>${trackTable(a.recent_tracks.slice(0, 5), ctx, { head: false, album: false })}</div></section>` : ''}
         ${a.top_tracks.length ? section('Populares', trackTable(a.top_tracks, ctx, { head: false })) : ''}
-        ${a.albums.length ? section('Discografia', `<div class="grid">${a.albums.map(albumCard).join('')}</div>`) : ''}
+        <div id="artist-releases"></div>
+        ${a.albums.length ? section('Discografia (do mais recente)', `<div class="grid">${a.albums.map(albumCard).join('')}</div>`) : ''}
         ${a.appears_on.length ? section('Aparece em', `<div class="grid row">${a.appears_on.map(albumCard).join('')}</div>`) : ''}
       </div>`;
     heroColor(a.cover_album ? coverUrl(a.cover_album) : null);
+    loadArtistReleases(id);
   },
 
   async playlist(id) {
@@ -849,7 +988,7 @@ const VIEWS = {
     const al = await api(`/albums?sort=${sort}`);
     const chip = (k, l) => `<a class="chip ${sort === k ? 'active' : ''}" href="#/albums?sort=${k}">${l}</a>`;
     view.innerHTML = `<div class="view-inner"><h1 class="page-title">Álbuns</h1>
-      <div class="filters">${chip('recent', 'Recentes')}${chip('title', 'A–Z')}${chip('artist', 'Artista')}${chip('year', 'Ano')}</div>
+      <div class="filters">${chip('release', 'Lançamento')}${chip('recent', 'Adicionados')}${chip('title', 'A–Z')}${chip('artist', 'Artista')}</div>
       <div class="grid">${al.map(albumCard).join('')}</div></div>`;
   },
 
@@ -1215,9 +1354,12 @@ function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTi
 async function searchResults(q) {
   const box = $('#search-results'); if (!box) return;
   if (!q) {
-    const tiles = [['#/songs', 'Músicas', '#e13300'], ['#/albums', 'Álbuns', '#1e3264'], ['#/artists', 'Artistas', '#8400e7'],
-      ['#/liked', 'Gostos', '#5038a0'], ['#/library?f=playlists', 'Playlists', '#148a08'], ['#/downloads', 'Downloads', '#e8115b']];
+    const tiles = [['#/songs', 'Músicas', '#ff4632'], ['#/albums', 'Álbuns', '#4100f5'], ['#/artists', 'Artistas', '#7f3aef'],
+      ['#/liked', 'Gostos', '#f037a5'], ['#/library?f=playlists', 'Playlists', '#0aa88f'], ['#/downloads', 'Downloads', '#2d46b9']];
     box.innerHTML = `<h1 class="page-title">Navegar</h1><div class="browse">${tiles.map(([h, l, c]) => `<a href="${h}" style="background:${c}">${l}</a>`).join('')}</div>`;
+    const gs = await api('/genres').catch(() => []);
+    if (gs.length && $('#search-results') === box && !$('#search-input').value.trim())
+      box.insertAdjacentHTML('beforeend', `<h2 class="page-title sm">Géneros</h2><div class="genre-grid">${gs.map(genreTile).join('')}</div>`);
     return;
   }
   const r = await api(`/search?q=${encodeURIComponent(q)}`);
@@ -1449,6 +1591,10 @@ document.addEventListener('click', async (e) => {
       case 'dl-back': stopPreview(); dl.view = dl.stack.pop() || null; renderDl(); break;
       case 'pv': togglePreview(dl.tracks[+a.dataset.i]); break;
       case 'dl-track': { const t = dl.tracks[+a.dataset.i]; dlQueue([t], `${t.title} — ${t.artist}`).catch((err) => toast(err.message)); break; }
+      case 'rel-dl': {
+        const al = REL.list[+a.dataset.i]; if (!al) break; toast('A obter as faixas…');
+        api(`/discover/album/${al.id}`).then((d) => dlQueue(d.tracks_list, `${al.title} — ${al.artist}`)).catch((err) => toast(err.message)); break;
+      }
       case 'dl-album-card': {
         const al = dl.albums[+a.dataset.i]; toast('A obter as faixas…');
         api(`/discover/album/${al.id}`).then((d) => dlQueue(d.tracks_list, `${al.title} — ${al.artist}`)).catch((err) => toast(err.message)); break;
@@ -1955,7 +2101,32 @@ function updateVolLabels() {
   const pct = Math.round(volNow() * 100) + '%';
   $$('.vol-pct').forEach((e) => { e.textContent = pct; });
   const nv = $('.nf-vol'); if (nv) nv.hidden = !R.target && !volumeSupported;   // iPhone: só no modo remoto
+  if (!nfVolDrag) setSlider($('#nf-vol'), volNow());
 }
+// volume no ecrã "Agora a tocar" (telemóvel): barra larga, fácil de arrastar com o polegar
+let nfVolDrag = false, volSendT = 0, volPending = null;
+function setVolumeTo(v, commit = false) {
+  v = Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
+  if (R.target) {
+    const d = remoteDev(); if (d?.state) d.state.vol = v;
+    volPending = v;                                     // envia no máximo ~12 vezes por segundo
+    if (commit || Date.now() - volSendT > 80) { rc('volume', { v }); volSendT = Date.now(); volPending = null; }
+    else setTimeout(() => { if (volPending !== null) { rc('volume', { v: volPending }); volSendT = Date.now(); volPending = null; } }, 90);
+    setSlider($('#vol'), v);
+  } else { master = v; muted = false; applyVolume(); updateVolume(); if (commit) { store.set('volume', master); pushState(); } }
+  $$('.vol-pct').forEach((e) => { e.textContent = Math.round(v * 100) + '%'; });
+}
+makeSlider($('#nf-vol'), {
+  onInput: (f) => { nfVolDrag = true; setVolumeTo(f); },
+  onCommit: (f) => { nfVolDrag = false; setVolumeTo(f ?? volNow(), true); },
+});
+// botões físicos de volume / teclas multimédia: no modo remoto mudam o volume do outro dispositivo
+document.addEventListener('keydown', (e) => {
+  const up = ['AudioVolumeUp', 'VolumeUp'].includes(e.key) || e.keyCode === 175;
+  const down = ['AudioVolumeDown', 'VolumeDown'].includes(e.key) || e.keyCode === 174;
+  if (!(up || down) || !R.target) return;
+  e.preventDefault(); stepVolume(up ? 1 : -1);
+});
 function kickDevice(id) {
   const d = R.devices.find((x) => x.id === id); if (!d || id === devId) return;
   wsSend({ t: 'cmd', to: id, cmd: 'disconnect', args: { by: devName() } });

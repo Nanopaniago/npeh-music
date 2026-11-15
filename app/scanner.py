@@ -12,6 +12,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from mutagen.mp4 import MP4
 
+from . import catalog
 from .config import AUDIO_EXTS, COVERS_DIR, MUSIC_DIR
 from .db import get_conn
 
@@ -114,6 +115,7 @@ def _read_tags(path: Path):
         "track_no": _int(_first(tags, "tracknumber")),
         "disc_no": _int(_first(tags, "discnumber")),
         "year": (_first(tags, "date") or _first(tags, "originaldate"))[:4] or None,
+        "release_date": catalog.norm_date(_first(tags, "date") or _first(tags, "originaldate")),
         "duration": round(f.info.length, 2) if f is not None and f.info else None,
         "genre": "; ".join(str(g).strip() for g in (tags.get("genre") or []) if str(g).strip())[:200] if tags else "",
     }
@@ -170,16 +172,19 @@ def scan(full=False):
                 if rel in known:
                     conn.execute(
                         """UPDATE tracks SET title=?, artist=?, artist_id=?, album_id=?, track_no=?, disc_no=?,
-                           duration=?, size=?, mtime=?, genre=? WHERE path=?""",
+                           duration=?, size=?, mtime=?, genre=?, genre_group=?, release_date=?, enriched=0 WHERE path=?""",
                         (t["title"], t["artist"], ar_id, al_id, t["track_no"], t["disc_no"],
-                         t["duration"], st.st_size, st.st_mtime, t["genre"], rel),
+                         t["duration"], st.st_size, st.st_mtime, t["genre"], catalog.family(t["genre"]),
+                         t["release_date"], rel),
                     )
                 else:
                     conn.execute(
                         """INSERT INTO tracks(path, title, artist, artist_id, album_id, track_no, disc_no,
-                           duration, size, mtime, genre) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                           duration, size, mtime, genre, genre_group, release_date)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (rel, t["title"], t["artist"], ar_id, al_id, t["track_no"], t["disc_no"],
-                         t["duration"], st.st_size, st.st_mtime, t["genre"]),
+                         t["duration"], st.st_size, st.st_mtime, t["genre"], catalog.family(t["genre"]),
+                         t["release_date"]),
                     )
                     state["added"] += 1
                 cover = conn.execute("SELECT cover FROM albums WHERE id=?", (al_id,)).fetchone()[0]
@@ -203,8 +208,10 @@ def scan(full=False):
         conn.execute("""DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL)
                         AND id NOT IN (SELECT artist_id FROM albums)""")
         conn.commit()
+        catalog.refresh_albums(conn)
         state["last_run"] = int(time.time())
         log.info("Scan concluído: %s", state)
+        catalog.start_background()      # género e data de lançamento das faixas novas (Deezer), em segundo plano
     finally:
         state["running"] = False
         _lock.release()

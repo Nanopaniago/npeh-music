@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import discover, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import catalog, discover, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -126,6 +126,7 @@ def logout(response: Response):
 # ---------------------------------------------------------------- helpers
 TRACK_SELECT = """
 SELECT t.id, t.title, t.artist, t.artist_id, t.album_id, t.track_no, t.disc_no, t.duration, t.added_at,
+       t.release_date, t.genre_group,
        al.title AS album, al.cover IS NOT NULL AS has_cover, ar.name AS album_artist,
        (SELECT 1 FROM likes l WHERE l.track_id=t.id) IS NOT NULL AS liked
 FROM tracks t
@@ -134,7 +135,7 @@ LEFT JOIN artists ar ON ar.id=al.artist_id
 """
 
 ALBUM_SELECT = """
-SELECT al.id, al.title, al.year, al.artist_id, ar.name AS artist, al.cover IS NOT NULL AS has_cover, al.added_at,
+SELECT al.id, al.title, al.year, al.release_date, al.artist_id, ar.name AS artist, al.cover IS NOT NULL AS has_cover, al.added_at,
        (SELECT COUNT(*) FROM tracks t WHERE t.album_id=al.id) AS track_count,
        (SELECT SUM(duration) FROM tracks t WHERE t.album_id=al.id) AS duration
 FROM albums al JOIN artists ar ON ar.id=al.artist_id
@@ -163,8 +164,12 @@ def albums_q(where="", params=(), order="al.title COLLATE NOCASE", limit=None):
     return _fix(rows(sql, params))
 
 
+REL_AL = "COALESCE(al.release_date, al.year, '') DESC"
+REL_T = "COALESCE(t.release_date, al.release_date, al.year, '') DESC"
+
+
 def artist_cover_sql():
-    return "(SELECT al.id FROM albums al WHERE al.artist_id=a.id AND al.cover IS NOT NULL ORDER BY al.year DESC LIMIT 1)"
+    return "(SELECT al.id FROM albums al WHERE al.artist_id=a.id AND al.cover IS NOT NULL ORDER BY COALESCE(al.release_date, al.year, '') DESC LIMIT 1)"
 
 
 # ---------------------------------------------------------------- library
@@ -184,14 +189,16 @@ def home():
                        ORDER BY plays DESC, a.name LIMIT 10""")
     stats = row("""SELECT (SELECT COUNT(*) FROM tracks) AS tracks, (SELECT COUNT(*) FROM albums) AS albums,
                    (SELECT COUNT(*) FROM artists) AS artists, (SELECT COALESCE(SUM(duration),0) FROM tracks) AS duration""")
+    new_releases = albums_q("al.release_date IS NOT NULL", order=f"{REL_AL}, al.id DESC", limit=12)
     return {"recent_albums": recent_albums, "recently_played": recently_played, "top_tracks": top,
-            "artists": artists, "playlists": list_playlists(), "stats": stats}
+            "artists": artists, "playlists": list_playlists(), "stats": stats, "new_releases": new_releases,
+            "genres": catalog.genres_summary()[:12]}
 
 
 @app.get("/api/albums")
 def list_albums(sort: str = "title"):
     order = {"title": "al.title COLLATE NOCASE", "recent": "al.added_at DESC, al.id DESC",
-             "artist": "ar.name COLLATE NOCASE, al.year", "year": "al.year DESC"}.get(sort, "al.title COLLATE NOCASE")
+             "artist": "ar.name COLLATE NOCASE, al.year", "year": REL_AL, "release": REL_AL}.get(sort, "al.title COLLATE NOCASE")
     return albums_q(order=order)
 
 
@@ -226,7 +233,13 @@ def get_artist(artist_id: int):
     a["top_tracks"] = tracks_q(
         "t.artist_id=? OR al.artist_id=? OR t.artist LIKE ?", (artist_id, artist_id, name_like),
         "(SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id) DESC, t.added_at DESC", limit=10)
-    a["albums"] = albums_q("al.artist_id=?", (artist_id,), "al.year DESC, al.title")
+    a["albums"] = albums_q("al.artist_id=?", (artist_id,), f"{REL_AL}, al.title")
+    # lançamentos mais recentes primeiro: o último lançamento em destaque e as músicas mais novas
+    a["latest"] = a["albums"][0] if a["albums"] else None
+    a["recent_tracks"] = tracks_q("t.artist_id=? OR al.artist_id=? OR t.artist LIKE ?", (artist_id, artist_id, name_like),
+                                  f"{REL_T}, t.added_at DESC", limit=10)
+    a["genres"] = [r["g"] for r in rows("""SELECT genre_group g, COUNT(*) n FROM tracks WHERE artist_id=? AND genre_group IS NOT NULL
+                                            GROUP BY g ORDER BY n DESC LIMIT 3""", (artist_id,))]
     a["appears_on"] = albums_q(
         "al.artist_id<>? AND al.id IN (SELECT album_id FROM tracks WHERE artist_id=? OR artist LIKE ?)",
         (artist_id, artist_id, name_like), limit=12)
@@ -241,7 +254,39 @@ def artist_all_tracks(artist_id: int):
     if not a:
         raise HTTPException(404)
     return tracks_q("t.artist_id=? OR al.artist_id=? OR t.artist LIKE ?", (artist_id, artist_id, f"%{a['name']}%"),
-                    "al.year DESC, al.title, COALESCE(t.disc_no,1), t.track_no")
+                    f"{REL_T}, al.title, COALESCE(t.disc_no,1), t.track_no")
+
+
+@app.get("/api/artists/{artist_id}/releases")
+async def artist_releases(artist_id: int):
+    """Últimos lançamentos do artista (Deezer), mesmo os que ainda não estão na biblioteca."""
+    a = row("SELECT name FROM artists WHERE id=?", (artist_id,))
+    if not a:
+        raise HTTPException(404)
+    try:
+        return await asyncio.to_thread(discover.latest_releases, a["name"])
+    except Exception as e:  # noqa
+        return {"artist": None, "releases": [], "error": str(e)}
+
+
+# ---------------------------------------------------------------- géneros
+@app.get("/api/genres")
+def list_genres():
+    return catalog.genres_summary()
+
+
+@app.get("/api/genres/{name}")
+def get_genre(name: str):
+    where = "COALESCE(t.genre_group, ?)=?"
+    p = (catalog.OTHER, name)
+    tracks = tracks_q(where, p, f"{REL_T}, t.added_at DESC", limit=3000)
+    if not tracks:
+        raise HTTPException(404)
+    artists = rows(f"""SELECT a.id, a.name, {artist_cover_sql()} AS cover_album, COUNT(*) AS n
+                       FROM tracks t JOIN artists a ON a.id=t.artist_id
+                       WHERE COALESCE(t.genre_group, ?)=? GROUP BY a.id ORDER BY n DESC, a.name LIMIT 30""", p)
+    albums = albums_q(f"al.id IN (SELECT album_id FROM tracks t WHERE {where})", p, f"{REL_AL}, al.id DESC", limit=24)
+    return {"name": name, "tracks": tracks, "artists": artists, "albums": albums, "track_count": len(tracks)}
 
 
 @app.get("/api/tracks")

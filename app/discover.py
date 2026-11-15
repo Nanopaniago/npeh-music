@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 from . import dedupe
+from .db import get_conn
 
 API = "https://api.deezer.com"
 _cache = {}
@@ -114,3 +115,29 @@ def artist_detail(aid):
         seen.add(key)
         uniq.append(_album(al))
     return {**_artist(a), "top": mark_library([_track(t) for t in top if t.get("id")]), "albums": uniq}
+
+
+def latest_releases(name, limit=10):
+    """Procura o artista pelo nome e devolve os lançamentos dele, do mais recente para o mais antigo."""
+    found = _get("/search/artist", {"q": name, "limit": 5}, ttl=3600)["data"]
+    want = dedupe.norm(name)
+    art = next((x for x in found if dedupe.norm(x.get("name", "")) == want), None)
+    if not art:
+        return {"artist": None, "releases": []}
+    albums = _get(f"/artist/{int(art['id'])}/albums", {"limit": 100}, ttl=3600)["data"]
+    albums.sort(key=lambda al: al.get("release_date") or "", reverse=True)
+    lib = {dedupe.norm(r[0]) for r in get_conn().execute(
+        "SELECT al.title FROM albums al JOIN artists ar ON ar.id=al.artist_id WHERE ar.name=? COLLATE NOCASE", (name,))}
+    seen, out = set(), []
+    for al in albums:
+        key = dedupe.norm(al.get("title", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        item = _album(al)
+        item["release_date"] = al.get("release_date")
+        item["in_library"] = key in lib
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return {"artist": _artist(art), "releases": out}
