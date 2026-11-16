@@ -1946,7 +1946,7 @@ async function createPlaylistWith(tracks, suggested) {
 async function pickPlaylist(tracks) {
   if (!tracks.length) return;
   let pls;
-  try { pls = (await api('/playlists')).filter((p) => !p.synced); } catch (e) { return toast(e.message); }
+  try { pls = await api('/playlists'); } catch (e) { return toast(e.message); }
   const m = $('#modal');
   const label = tracks.length === 1 ? esc(tracks[0].title) : plural(tracks.length, 'música', 'músicas');
   m.innerHTML = `<div class="modal-card picker"><h3>Adicionar a uma playlist</h3><p class="dl-hint">${label}</p>
@@ -2008,7 +2008,6 @@ document.addEventListener('drop', async (e) => {
   const tracks = DRAG; DRAG = null; clearSel();
   if (t.matches('[data-action="new-playlist"]')) return createPlaylistWith(tracks);
   if (t.getAttribute('href') === '#/liked') { for (const tr of tracks) if (!tr.liked) await setLike(tr, true); return; }
-  if (t.querySelector('.sync-ic')) return toast('Esta playlist é sincronizada com a original: as músicas adicionadas à mão seriam substituídas');
   addToPlaylist(t.getAttribute('href').split('/').pop(), tracks, t.querySelector('.t').textContent);
 });
 

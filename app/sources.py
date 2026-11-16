@@ -161,12 +161,16 @@ def relink(source_id=None):
                     wanted.append(tid)
                     seen.add(tid)
                     break
-        current = [r[0] for r in conn.execute(
-            "SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (s["playlist_id"],))]
-        if current != wanted:
+        cur_rows = conn.execute("SELECT track_id, COALESCE(manual,0) FROM playlist_tracks WHERE playlist_id=? ORDER BY position",
+                                (s["playlist_id"],)).fetchall()
+        current = [r[0] for r in cur_rows]
+        # as músicas que adicionaste à mão ficam, no fim, pela ordem em que as puseste
+        manual = [r[0] for r in cur_rows if r[1] and r[0] not in seen]
+        final = wanted + list(dict.fromkeys(manual))
+        if current != final:
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (s["playlist_id"],))
-            conn.executemany("INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES (?,?,?)",
-                             [(s["playlist_id"], tid, i) for i, tid in enumerate(wanted, 1)])
+            conn.executemany("INSERT INTO playlist_tracks(playlist_id, track_id, position, manual) VALUES (?,?,?,?)",
+                             [(s["playlist_id"], tid, i, 1 if i > len(wanted) else 0) for i, tid in enumerate(final, 1)])
             conn.execute("UPDATE playlists SET updated_at=strftime('%s','now') WHERE id=?", (s["playlist_id"],))
         conn.execute("UPDATE pl_sources SET matched=? WHERE id=?", (len(wanted), s["id"]))
     conn.commit()

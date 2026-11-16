@@ -42,7 +42,7 @@ DEFAULTS = {
     "dl_template": SPOTDL_OUTPUT,
     "dl_format": "original",
     "dl_bitrate": "320k",
-    "dl_threads": _clamp_int(SPOTDL_THREADS, 1, 4, 2),
+    "dl_threads": 1,          # cada download em paralelo abre um Deno (~250 MB): 1 é o mais estável
     "dl_lyrics": True,
     "pl_sync_hours": 6,
     "canvas_auto": True,

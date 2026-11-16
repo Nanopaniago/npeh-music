@@ -12,7 +12,7 @@ services:
       - /mnt/dietpi_userdata/music:/music
       # base de dados, capas e chave de sessão
       - ./data:/data
-    mem_limit: 512m
+    mem_limit: 1g
     logging:
       driver: json-file
       options: { max-size: "5m", max-file: "2" }

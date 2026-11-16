@@ -163,6 +163,9 @@ def init_db():
         if col not in tcols:      # organização por género e data de lançamento
             conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {decl}")
             migrated.add(col)
+    if "manual" not in {r[1] for r in conn.execute("PRAGMA table_info(playlist_tracks)")}:
+        # músicas que tu adicionaste a uma playlist sincronizada (a sincronização não as apaga)
+        conn.execute("ALTER TABLE playlist_tracks ADD COLUMN manual INTEGER DEFAULT 0")
     if "release_date" not in {r[1] for r in conn.execute("PRAGMA table_info(albums)")}:
         conn.execute("ALTER TABLE albums ADD COLUMN release_date TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre_group)")

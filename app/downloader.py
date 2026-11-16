@@ -333,11 +333,15 @@ async def _run_job(job_id: int):
                 att_done += 1
             elif RE_FAIL.search(line):
                 att_failed += 1
-            if attempt == 1:
-                done, failed = att_done, att_failed
+            if att_done > done or attempt == 1:
+                done, failed = max(done, att_done), att_failed
                 _update(job_id, done=done, failed=failed, total=max(total, done + failed))
         rc = await proc.wait()
         _current.update(job_id=None, proc=None)
+        killed = rc < 0 or rc in (137, 143)
+        if killed:
+            _append_log(job_id, "✗ o spotDL foi interrompido (falta de memória no servidor?)"
+                        + (" — nova tentativa daqui a 20 s" if attempt < ATTEMPTS else ""))
         if (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled":
             break
         # verificação de cada ficheiro novo: só passa o que está completo
@@ -354,6 +358,9 @@ async def _run_job(job_id: int):
                 _append_log(job_id, f"✗ {rel}: {why} — apagado")
                 for x in [p, *_sidecars(p)]:
                     x.unlink(missing_ok=True)
+        if killed and attempt < ATTEMPTS and (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") != "cancelled":
+            await asyncio.sleep(20)
+            continue
         if not bad:
             break
     cancelled = (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled"

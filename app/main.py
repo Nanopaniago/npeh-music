@@ -498,7 +498,7 @@ def add_to_playlist(pid: int, track_ids: list[int] = Body(..., embed=True)):
             continue
         pos += 1
         added += 1
-        c.execute("INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES (?,?,?)", (pid, tid, pos))
+        c.execute("INSERT INTO playlist_tracks(playlist_id, track_id, position, manual) VALUES (?,?,?,1)", (pid, tid, pos))
     c.execute("UPDATE playlists SET updated_at=strftime('%s','now') WHERE id=?", (pid,))
     c.commit()
     return {"ok": True, "added": added, "skipped": len(track_ids) - added}

@@ -150,6 +150,10 @@ def make(track_id: int):
 def _worker():
     while True:
         _p, _t, tid = _q.get()
+        # o yt-dlp do vídeo curto também abre o Deno: espera que os downloads de música acabem (poupa memória)
+        from . import downloader
+        while downloader._current.get("proc") is not None:
+            time.sleep(5)
         state.update(running=True, current=tid)
         try:
             if make(tid) == "ok":
