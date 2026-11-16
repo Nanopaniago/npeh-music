@@ -10,9 +10,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # spotDL num ambiente isolado (evita conflitos de versões com a app)
+# O YouTube agora exige um motor de JavaScript (Deno) e o componente yt-dlp-ejs para resolver os desafios
 RUN python -m venv /opt/spotdl \
- && /opt/spotdl/bin/pip install --no-cache-dir "spotdl>=4.2" \
- && ln -s /opt/spotdl/bin/spotdl /usr/local/bin/spotdl
+ && /opt/spotdl/bin/pip install --no-cache-dir "spotdl>=4.2" "yt-dlp[default]" deno \
+ && ln -s /opt/spotdl/bin/spotdl /usr/local/bin/spotdl \
+ && ln -sf /opt/spotdl/bin/deno /usr/local/bin/deno \
+ && deno --version
 
 WORKDIR /app
 COPY requirements.txt .
