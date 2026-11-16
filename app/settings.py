@@ -49,6 +49,7 @@ DEFAULTS = {
     "autoplay": True,
     "rel_notify": True,
     "rel_auto": False,
+    "car_resume": True,
 }
 
 class SettingError(ValueError):
@@ -95,7 +96,7 @@ def _validate(key, v):
         if i not in SYNC_OPTIONS:
             raise SettingError("Intervalo de sincronização inválido.")
         return i
-    if key in ("dl_lyrics", "canvas_auto", "autoplay", "rel_notify", "rel_auto"):
+    if key in ("dl_lyrics", "canvas_auto", "autoplay", "rel_notify", "rel_auto", "car_resume"):
         if isinstance(v, bool):
             return v
         raise SettingError("Valor inválido.")

@@ -902,3 +902,7 @@ html { scrollbar-color: #ffffff26 transparent; }
   .rel-cover { width: 92px; height: 92px; }
 }
 .rel-info small { padding-right: 26px; }
+.now-full header .icon-btn { flex: none; width: 40px !important; height: 40px !important; min-width: 40px; padding: 0 !important; aspect-ratio: 1; border-radius: 50%; }
+.now-full header .icon-btn .i { width: 20px; height: 20px; }
+.now-full header #nf-context { flex: 1; min-width: 0; text-align: center; }
+.nf-hacts { flex: none; }

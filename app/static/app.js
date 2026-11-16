@@ -197,7 +197,16 @@ function togglePlay() {
     return;
   }
   if (audio.paused) audio.play().catch(() => {});
-  else { killFade(); audio.pause(); }
+  else { userPause(); }
+}
+// pausa pedida pelo utilizador (≠ pausa do sistema: chamada, auriculares/carro desligados)
+let pausedByUser = false, sysPausedAt = 0;
+function userPause() { pausedByUser = true; killFade(); audio.pause(); }
+function resumePlayback() {
+  if (R.target) return rc('play');
+  if (!current()) return;
+  if (!audio.getAttribute('src')) { const s = store.get('player', null); load(true, s?.time || 0); return; }
+  audio.play().catch(playBlocked);
 }
 
 function peekNext() {
@@ -380,6 +389,15 @@ function onTime() {
     }
   }
 }
+// ------------------------------------------------------------------ carro / Bluetooth: retoma ao voltar a ligar
+// Quando o telemóvel liga ao CarPlay (ou a um Bluetooth), o sistema muda a saída de áudio. Se a música tinha sido
+// pausada pelo sistema (não por ti) nas últimas 3 horas, volta a tocar exatamente onde estava.
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  if (!S.car_resume || R.target || !current() || !audio.paused || !sysPausedAt) return;
+  if (Date.now() - sysPausedAt > 3 * 3600e3) return;
+  setTimeout(() => { if (audio.paused && sysPausedAt) { sysPausedAt = 0; resumePlayback(); } }, 1200);
+});
+
 // ------------------------------------------------------------------ a música nunca para por conta própria
 // Falhas de rede (Cloudflare, Wi-Fi ↔ dados), ficheiros a ser lidos pelo servidor, buffers que encravam:
 // em vez de saltar ou parar, volta a pedir o áudio e continua no mesmo segundo.
@@ -419,7 +437,11 @@ setInterval(() => {   // vigia: a tocar mas parada há mais de 12 s (buffer encr
 
 function bindAudio(el) {
   el.addEventListener('play', () => { if (el !== audio) return; P.want = true; REC.lastMove = Date.now(); if (PV.key) { PV.resume = false; stopPreview(); } markPlaying(); pushState(); });
-  el.addEventListener('pause', () => { if (el === audio) { if (!REC.timer && !el.ended && !el.error) P.want = false; markPlaying(); saveState(); pushState(); } });
+  el.addEventListener('pause', () => { if (el === audio) {
+    if (!pausedByUser && !el.ended && !REC.timer && current()) sysPausedAt = Date.now();   // pausa do sistema (ex.: desligou do carro)
+    if (pausedByUser) sysPausedAt = 0;
+    pausedByUser = false;
+    if (!REC.timer && !el.ended && !el.error) P.want = false; markPlaying(); saveState(); pushState(); } });
   el.addEventListener('seeked', () => { if (el === audio) pushState(); });
   el.addEventListener('loadedmetadata', () => { if (el === audio) pushState(); });
   el.addEventListener('ended', () => {
@@ -447,8 +469,8 @@ function bindAudio(el) {
 els.forEach(bindAudio);
 if ('mediaSession' in navigator) {
   const ms = navigator.mediaSession;
-  ms.setActionHandler('play', () => audio.play());
-  ms.setActionHandler('pause', () => audio.pause());
+  ms.setActionHandler('play', resumePlayback);   // o "play" do carro / ecrã bloqueado continua exatamente onde estava
+  ms.setActionHandler('pause', userPause);
   ms.setActionHandler('previoustrack', prev);
   ms.setActionHandler('nexttrack', () => next());
   try { ms.setActionHandler('seekto', (e) => { audio.currentTime = e.seekTime; }); } catch { /* */ }
@@ -1158,6 +1180,8 @@ const VIEWS = {
           ? 'Mistura o fim de uma música com o início da seguinte. Com 0 fica desligado.'
           : 'Este dispositivo (iPhone/iPad) não deixa o browser controlar o volume, por isso o crossfade não está disponível aqui.',
           `<input type="range" class="rng" min="0" max="12" step="1" value="${v.crossfade}" data-set="crossfade" ${volumeSupported ? '' : 'disabled'}><span class="rng-val" id="cf-val">${v.crossfade ? v.crossfade + ' s' : 'Desligado'}</span>`)}
+        ${row('Retomar no carro', 'Quando ligas o telemóvel ao CarPlay ou a um Bluetooth e a música tinha parado sozinha (por teres desligado), volta a tocar exatamente onde estava. O botão play do carro também continua a mesma música no mesmo segundo.',
+          `<input type="checkbox" class="chk" data-set="car_resume" ${v.car_resume ? 'checked' : ''}>`)}
         ${row('Reprodução contínua (rádio automática)', 'Quando a fila acaba, a música não para: o nPlay continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão. As tuas mais tocadas aparecem mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Desliga-se com "repetir" ativo.',
           `<input type="checkbox" class="chk" data-set="autoplay" ${v.autoplay ? 'checked' : ''}>`)}
       </section>
@@ -2174,7 +2198,7 @@ function onCmd(m) {
   switch (m.cmd) {
     case 'toggle': togglePlay(); break;
     case 'play': audio.play().catch(playBlocked); break;
-    case 'pause': case 'stop': killFade(); audio.pause(); break;
+    case 'pause': case 'stop': userPause(); break;
     case 'next': next(); break;
     case 'prev': prev(); break;
     case 'seek': if (current()) audio.currentTime = Math.max(0, +a.t || 0); break;
