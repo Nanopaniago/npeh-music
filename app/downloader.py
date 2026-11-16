@@ -30,6 +30,8 @@ ARCHIVE = DATA_DIR / "spotdl-archive.txt"   # URLs do Spotify já descarregados 
 # Os downloads acontecem numa pasta escondida dentro da pasta da música (o scanner ignora pastas com ".").
 # Só depois de verificado (descodifica até ao fim e tem a duração certa) é que o ficheiro entra na biblioteca.
 STAGING = MUSIC_DIR / ".nplay-staging"
+# cookies do YouTube (opcional): resolvem o "Please sign in" que o YouTube às vezes exige a servidores
+COOKIES = DATA_DIR / "youtube-cookies.txt"
 ATTEMPTS = 3          # tentativas por job para as músicas que chegarem incompletas
 
 RE_FOUND = re.compile(r"Found (\d+) songs?", re.I)
@@ -97,6 +99,10 @@ def build_cmd(queries, s, archive=None):
         cmd += ["--yt-dlp-args", "--retries 15 --fragment-retries 15 --retry-sleep 3"]
     if _supports("--max-retries"):
         cmd += ["--max-retries", "5"]
+    # se o YouTube Music não tiver (ou bloquear) a música, tenta o YouTube normal
+    cmd += ["--audio", "youtube-music", "youtube"]
+    if COOKIES.exists() and COOKIES.stat().st_size > 0:
+        cmd += ["--cookie-file", str(COOKIES)]
     if bitrate:
         cmd += ["--bitrate", bitrate]
     if s["dl_lyrics"]:

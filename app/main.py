@@ -749,7 +749,25 @@ def system_info():
             "disk": system.disk(), "library": stats, "scan": scanner.state,
             "auth_enabled": bool(APP_PASSWORD), "lyrics": lyrics.stats(), "canvas": canvasgen.stats(),
             "synced": row("SELECT COUNT(*) c FROM pl_sources")["c"],
-            "archive": downloader.ARCHIVE.exists() and sum(1 for _ in open(downloader.ARCHIVE, errors="ignore"))}
+            "archive": downloader.ARCHIVE.exists() and sum(1 for _ in open(downloader.ARCHIVE, errors="ignore")),
+            "cookies": downloader.COOKIES.exists() and int(downloader.COOKIES.stat().st_mtime)}
+
+
+@app.post("/api/settings/cookies")
+async def upload_cookies(request: Request):
+    """Recebe o cookies.txt do YouTube (formato Netscape, exportado do browser)."""
+    text = (await request.body()).decode("utf-8", "replace")
+    if len(text) > 2_000_000 or ("youtube.com" not in text) or ("\t" not in text):
+        raise HTTPException(400, "Isto não parece um cookies.txt do YouTube (formato Netscape).")
+    downloader.COOKIES.write_text(text if text.startswith("# ") else "# Netscape HTTP Cookie File\n" + text)
+    downloader.COOKIES.chmod(0o600)
+    return {"ok": True}
+
+
+@app.delete("/api/settings/cookies")
+def delete_cookies():
+    downloader.COOKIES.unlink(missing_ok=True)
+    return {"ok": True}
 
 
 @app.get("/api/system/versions")

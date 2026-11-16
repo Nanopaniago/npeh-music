@@ -73,7 +73,8 @@ def request(track_id: int, priority: int = 5):
 
 def _ytdlp():
     py = VENV_PY if VENV_PY.exists() else Path(sys.executable)
-    return [str(py), "-m", "yt_dlp"]
+    cookies = DATA_DIR / "youtube-cookies.txt"
+    return [str(py), "-m", "yt_dlp"] + (["--cookies", str(cookies)] if cookies.exists() and cookies.stat().st_size else [])
 
 
 def _fetch_clip(artist: str, title: str, out_dir: Path):

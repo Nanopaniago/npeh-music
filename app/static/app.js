@@ -37,6 +37,7 @@ const ago = (ts) => {
 async function api(path, opts = {}) {
   const o = { method: opts.method || (opts.json !== undefined ? 'POST' : 'GET'), headers: {} };
   if (opts.json !== undefined) { o.body = JSON.stringify(opts.json); o.headers['Content-Type'] = 'application/json'; }
+  if (opts.body !== undefined) { o.method = opts.method || 'POST'; o.body = opts.body; o.headers['Content-Type'] = 'text/plain'; }
   const r = await fetch('/api' + path, o);
   if (r.status === 401 && path !== '/login') { showLogin(); throw new Error('auth'); }
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
@@ -1227,6 +1228,8 @@ const VIEWS = {
           `<select class="sel" data-set="dl_structure">${opt(structLabels, v.dl_structure)}</select>`)}
         ${v.dl_structure === 'custom' ? row('Modelo personalizado', 'Variáveis do spotDL: <code>{artist}</code> <code>{album-artist}</code> <code>{album}</code> <code>{title}</code> <code>{track-number}</code> <code>{year}</code>. Tem de acabar em <code>{output-ext}</code>.',
           `<input class="txt wide" data-set="dl_template" value="${esc(v.dl_template)}" spellcheck="false">`, 'stack') : ''}
+        ${row('Cookies do YouTube', `Alguns vídeos dão "Please sign in" porque o YouTube desconfia de servidores. Com os cookies de uma conta YouTube (pode ser uma conta secundária) esses downloads passam a funcionar. No computador: extensão <b>Get cookies.txt LOCALLY</b> → abre youtube.com com a sessão iniciada → exporta → envia aqui. ${sys.cookies ? `<b>Ativos</b> desde ${new Date(sys.cookies * 1000).toLocaleDateString('pt-PT')}.` : 'Ainda não enviados.'}`,
+          `<label class="ghost-btn" style="cursor:pointer">Enviar cookies.txt<input type="file" accept=".txt,text/plain" id="cookies-file" hidden></label>${sys.cookies ? '<button class="ghost-btn" data-action="cookies-del">Remover</button>' : ''}`)}
         ${row('Formato', 'Original guarda o áudio exatamente como vem do YouTube (Opus), sem o converter outra vez: é a melhor qualidade que existe na fonte e ocupa pouco. A fonte já tem perdas, por isso FLAC e WAV só ficam 5 a 10 vezes maiores sem soar melhor. M4A, MP3 e OGG reconvertem.',
           `<select class="sel" data-set="dl_format">${opt([['original', 'Original (melhor qualidade)'], ['m4a', 'M4A (AAC)'], ['mp3', 'MP3'], ['ogg', 'OGG'], ['flac', 'FLAC (sem ganho real)'], ['wav', 'WAV']], v.dl_format)}</select>`)}
         ${keepQ ? row('Qualidade', 'Só conta para os formatos que reconvertem. "Original" não reconverte; acima de 256k quase não há ganho porque a fonte é do YouTube.',
@@ -1454,7 +1457,12 @@ view.addEventListener('input', (e) => {
   const el = e.target.closest('input[data-set="crossfade"]');
   if (el) $('#cf-val').textContent = +el.value ? el.value + ' s' : 'Desligado';
 });
-view.addEventListener('change', (e) => {
+view.addEventListener('change', async (e) => {
+  if (e.target.id === 'cookies-file') {
+    const f = e.target.files?.[0]; if (!f) return;
+    try { await api('/settings/cookies', { body: await f.text() }); toast('Cookies do YouTube guardados'); refreshView(); } catch (err) { toast(err.message); }
+    return;
+  }
   if (e.target.name?.startsWith('dup-')) {               // escolher a cópia que fica
     const card = e.target.closest('.dup-card');
     card.querySelectorAll('.dup-row').forEach((r) => { const k = r.querySelector('input').checked; r.classList.toggle('keep', k); r.querySelector('.dup-state').textContent = k ? 'Fica' : 'Sai'; });
@@ -1713,6 +1721,7 @@ document.addEventListener('click', async (e) => {
       case 'rel-play': { const x = NR.items[+a.dataset.i]; if (x) relPlay(x); break; }
       case 'rel-preview': { const x = NR.items[+a.dataset.i]; if (x) relPreview(x); break; }
       case 'rel-dismiss': { const x = NR.items[+a.dataset.i]; if (!x) break; api(`/releases/${x.id}/dismiss`, { json: {} }).then(loadReleases); break; }
+      case 'cookies-del': api('/settings/cookies', { method: 'DELETE' }).then(() => { toast('Cookies removidos'); refreshView(); }); break;
       case 'rel-check': api('/releases/check', { json: {} }).then(() => toast('A procurar lançamentos novos… aparecem no início daqui a 1–3 minutos')); break;
       case 'go-home': closeNow(); location.hash = '#/'; break;
       case 'rel-dl': {
