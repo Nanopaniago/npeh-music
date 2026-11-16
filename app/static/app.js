@@ -770,6 +770,73 @@ async function heroColor(src) {
   if (c) { view.style.setProperty('--hero', c); $('#topbar').style.setProperty('--topbar-bg', `color-mix(in srgb, ${c} 45%, #121212)`); }
 }
 
+// ------------------------------------------------------------------ novos lançamentos dos teus artistas
+const NR = { items: [], waiting: new Set() };
+const seenRel = () => new Set(store.get('rel_seen', []));
+async function loadReleases() {
+  let r; try { r = await api('/releases'); } catch { return; }
+  NR.items = r.items || [];
+  const box = $('#rel-banner'); updateRelDot();
+  if (!box || route.name !== 'home') return;
+  if (!NR.items.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="rel-strip">${NR.items.map((x, i) => `
+    <div class="rel-banner" style="--rc:${genreColor(x.artist)}">
+      <div class="rel-bg" style="background-image:url('${esc(x.cover || '')}')"></div>
+      <img class="rel-cover" src="${esc(x.cover || '')}" alt="" loading="lazy">
+      <div class="rel-info">
+        <small>${seenRel().has(x.id) ? '' : '<span class="new-tag">Novo</span>'}Novo lançamento · ${x.kind === 'single' ? 'Single' : x.kind === 'ep' ? 'EP' : 'Álbum'} · ${esc(fmtRelease(x.release_date))}</small>
+        <b>${esc(x.title)}</b><a href="#/artist/${x.artist_id}">${esc(x.artist)}</a>
+        <div class="rel-acts">
+          <button class="primary-btn sm" data-action="rel-play" data-i="${i}">${icon('play')} ${x.album_id ? 'Ouvir agora' : NR.waiting.has(x.id) || x.queued ? 'A descarregar…' : 'Ouvir agora'}</button>
+          ${x.album_id ? '' : `<button class="ghost-btn sm" data-action="rel-preview" data-i="${i}">${icon('play')} Prévia</button>`}
+        </div>
+      </div>
+      <button class="icon-btn rel-x" data-action="rel-dismiss" data-i="${i}" title="Dispensar">${icon('close')}</button>
+    </div>`).join('')}</div>`;
+  // marca como vistos depois de os mostrar
+  setTimeout(() => { store.set('rel_seen', [...new Set([...seenRel(), ...NR.items.map((x) => x.id)])].slice(-200)); updateRelDot(); }, 4000);
+}
+function updateRelDot() {
+  const seen = seenRel(); const n = NR.items.filter((x) => !seen.has(x.id)).length;
+  $$('[data-nav="home"]').forEach((a) => a.classList.toggle('has-dot', n > 0));
+}
+async function relPlay(x) {
+  if (x.album_id) { playCtx(`album:${x.album_id}`); return; }
+  NR.waiting.add(x.id);
+  try { await api(`/releases/${x.id}/download`, { json: {} }); } catch (e) { NR.waiting.delete(x.id); return toast(e.message); }
+  toast(`A descarregar "${x.title}" — começa a tocar assim que estiver pronto`);
+  loadReleases();
+  const t0 = Date.now();
+  const tick = async () => {
+    if (!NR.waiting.has(x.id) || Date.now() - t0 > 30 * 60000) return;
+    let r; try { r = await api('/releases'); } catch { r = null; }
+    const got = r?.items.find((y) => y.id === x.id && y.album_id);
+    if (got) {
+      NR.waiting.delete(x.id); loadLibrary();
+      if (!isPlayingNow()) { playCtx(`album:${got.album_id}`); toast(`A tocar o lançamento novo de ${x.artist}`); }
+      else toast(`"${x.title}" já está na biblioteca`);
+      if (route.name === 'home') loadReleases();
+      return;
+    }
+    setTimeout(tick, 8000);
+  };
+  setTimeout(tick, 8000);
+}
+async function relPreview(x) {
+  try {
+    const d = await api(`/discover/album/${x.id}`);
+    const t = d.tracks_list.find((y) => y.preview); if (!t) return toast('Este lançamento não tem prévia');
+    togglePreview(t);
+  } catch (e) { toast(e.message); }
+}
+// novidades ao abrir a app (uma vez por lançamento)
+setTimeout(async () => {
+  try { const r = await api('/releases'); NR.items = r.items || []; } catch { return; }
+  updateRelDot();
+  const seen = seenRel(); const fresh = NR.items.filter((x) => !seen.has(x.id));
+  if (fresh.length && route.name !== 'home') toast(fresh.length === 1 ? `Novo lançamento de ${fresh[0].artist}: "${fresh[0].title}"` : `${fresh.length} lançamentos novos dos teus artistas — vê no início`);
+}, 5000);
+
 // últimos lançamentos do artista (Deezer), com os que faltam prontos a descarregar
 const REL = { list: [] };
 async function loadArtistReleases(id) {
@@ -800,6 +867,7 @@ const VIEWS = {
     d.recent_albums.slice(0, 8 - sc.length).forEach((a) => sc.push(`<div class="shortcut" data-href="#/album/${a.id}">${art(a.id, a.has_cover)}<div class="t">${esc(a.title)}</div><button class="fab" data-action="play-ctx" data-play-ctx="album:${a.id}">${icon('play')}</button></div>`));
     let html = `<div class="view-inner"><h1 class="greeting">${greeting()}</h1>
       <p class="stats">${plural(d.stats.tracks, 'música', 'músicas')} · ${plural(d.stats.albums, 'álbum', 'álbuns')} · ${plural(d.stats.artists, 'artista', 'artistas')} · ${fmtLong(d.stats.duration)}</p>
+      <div id="rel-banner"></div>
       <div class="shortcuts">${sc.join('')}</div>`;
     if (d.recently_played.length) {
       const k = registerList(d.recently_played, { key: 'recent', label: 'Tocadas recentemente' });
@@ -812,6 +880,7 @@ const VIEWS = {
     html += section('Os teus artistas', `<div class="grid row">${d.artists.map(artistCard).join('')}</div>`, '#/artists');
     if (d.playlists.length) html += section('As tuas playlists', `<div class="grid row">${d.playlists.map(playlistCard).join('')}</div>`, '#/library');
     view.innerHTML = html + '</div>';
+    loadReleases();
     const firstCover = d.recent_albums.find((a) => a.has_cover);
     if (firstCover) {
       const c = await dominantColor(coverUrl(firstCover.id));
@@ -1091,6 +1160,14 @@ const VIEWS = {
           `<input type="range" class="rng" min="0" max="12" step="1" value="${v.crossfade}" data-set="crossfade" ${volumeSupported ? '' : 'disabled'}><span class="rng-val" id="cf-val">${v.crossfade ? v.crossfade + ' s' : 'Desligado'}</span>`)}
         ${row('Reprodução contínua (rádio automática)', 'Quando a fila acaba, a música não para: o nPlay continua com músicas do mesmo género e do mesmo artista, e das playlists onde elas estão. As tuas mais tocadas aparecem mais vezes, em ordem aleatória e sem repetir o que acabou de tocar. Desliga-se com "repetir" ativo.',
           `<input type="checkbox" class="chk" data-set="autoplay" ${v.autoplay ? 'checked' : ''}>`)}
+      </section>
+
+      <section class="set-card"><h2>Novos lançamentos</h2>
+        ${row('Avisar quando um artista teu lançar música', 'De 12 em 12 horas o nPlay vê no Deezer se os artistas da tua biblioteca lançaram algo novo nos últimos 45 dias. Os lançamentos aparecem no início com "Ouvir agora".',
+          `<input type="checkbox" class="chk" data-set="rel_notify" ${v.rel_notify ? 'checked' : ''}>`)}
+        ${row('Descarregar os lançamentos automaticamente', 'Assim que um lançamento novo é encontrado, entra logo na fila de downloads (fica pronto a ouvir sem fazeres nada).',
+          `<input type="checkbox" class="chk" data-set="rel_auto" ${v.rel_auto ? 'checked' : ''}>`)}
+        ${row('Procurar agora', 'Verifica já todos os artistas (demora 1–3 minutos; os resultados aparecem no início).', `<button class="ghost-btn" data-action="rel-check">Procurar</button>`)}
       </section>
 
       <section class="set-card"><h2>Vídeos curtos</h2>
@@ -1609,6 +1686,11 @@ document.addEventListener('click', async (e) => {
       case 'dl-back': stopPreview(); dl.view = dl.stack.pop() || null; renderDl(); break;
       case 'pv': togglePreview(dl.tracks[+a.dataset.i]); break;
       case 'dl-track': { const t = dl.tracks[+a.dataset.i]; dlQueue([t], `${t.title} — ${t.artist}`).catch((err) => toast(err.message)); break; }
+      case 'rel-play': { const x = NR.items[+a.dataset.i]; if (x) relPlay(x); break; }
+      case 'rel-preview': { const x = NR.items[+a.dataset.i]; if (x) relPreview(x); break; }
+      case 'rel-dismiss': { const x = NR.items[+a.dataset.i]; if (!x) break; api(`/releases/${x.id}/dismiss`, { json: {} }).then(loadReleases); break; }
+      case 'rel-check': api('/releases/check', { json: {} }).then(() => toast('A procurar lançamentos novos… aparecem no início daqui a 1–3 minutos')); break;
+      case 'go-home': closeNow(); location.hash = '#/'; break;
       case 'rel-dl': {
         const al = REL.list[+a.dataset.i]; if (!al) break; toast('A obter as faixas…');
         api(`/discover/album/${al.id}`).then((d) => dlQueue(d.tracks_list, `${al.title} — ${al.artist}`)).catch((err) => toast(err.message)); break;

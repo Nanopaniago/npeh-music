@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import catalog, discover, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import catalog, discover, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -48,6 +48,18 @@ async def playlist_sync_loop():
         await asyncio.sleep(300)
 
 
+async def releases_loop():
+    """Novos lançamentos dos artistas da biblioteca: verifica 2 minutos depois de arrancar e depois de 12 em 12 h."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            if app_settings.get_all()["rel_notify"] and releases.loop_once_due():
+                await asyncio.to_thread(releases.check)
+        except Exception:  # noqa
+            logging.getLogger("releases").exception("falhou")
+        await asyncio.sleep(1800)
+
+
 def _after_job(job_id: int):
     sources.relink()                       # faixas novas entram nas playlists sincronizadas
     if not app_settings.get_all()["canvas_auto"]:
@@ -69,10 +81,11 @@ def _after_job(job_id: int):
 @asynccontextmanager
 async def lifespan(app):
     migrated = init_db()
+    releases.init()
     downloader.AFTER_JOB.append(_after_job)
     canvasgen.start()
     tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop()),
-             asyncio.create_task(playlist_sync_loop())]
+             asyncio.create_task(playlist_sync_loop()), asyncio.create_task(releases_loop())]
     if SCAN_ON_START or "genre" in migrated:
         # depois de atualizar de uma versão sem géneros, relê as etiquetas de tudo (uma vez)
         tasks.append(asyncio.create_task(asyncio.to_thread(scanner.scan, "genre" in migrated)))
@@ -267,6 +280,32 @@ async def artist_releases(artist_id: int):
         return await asyncio.to_thread(discover.latest_releases, a["name"])
     except Exception as e:  # noqa
         return {"artist": None, "releases": [], "error": str(e)}
+
+
+# ---------------------------------------------------------------- novos lançamentos
+@app.get("/api/releases")
+def list_releases():
+    return {"items": releases.listing(), "state": releases.state}
+
+
+@app.post("/api/releases/check")
+def check_releases():
+    releases.start_check()
+    return {"ok": True}
+
+
+@app.post("/api/releases/{rid}/download")
+async def download_release(rid: int):
+    try:
+        return await asyncio.to_thread(releases.queue, rid)
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"Não foi possível obter o lançamento ({e})")
+
+
+@app.post("/api/releases/{rid}/dismiss")
+def dismiss_release(rid: int):
+    releases.dismiss(rid)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- géneros
