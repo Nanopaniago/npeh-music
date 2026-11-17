@@ -2,10 +2,10 @@
 //  - guarda a "casca" da app para abrir instantaneamente (e offline);
 //  - capas: cache primeiro;
 //  - música: se a faixa foi guardada offline serve-a do cache (com suporte a Range, para avançar/recuar), senão vai à rede.
-const SHELL_CACHE = 'pobrefy-shell-v18';
+const SHELL_CACHE = 'pobrefy-shell-v19';
 const COVERS = 'pobrefy-covers-v1';
 const AUDIO = 'pobrefy-audio-v1';      // o mesmo nome que a app usa em OFF.cache
-const SHELL = ['/', '/static/style.css?v=17', '/static/app.js?v=17', '/static/icons/mark.png', '/static/icons/icon-192.png', '/manifest.webmanifest'];
+const SHELL = ['/', '/static/style.css?v=18', '/static/app.js?v=18', '/static/icons/mark.png', '/static/icons/icon-192.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

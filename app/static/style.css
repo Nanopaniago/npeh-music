@@ -111,7 +111,7 @@ input, textarea { font: inherit; color: inherit; }
 .action-bar { display: flex; align-items: center; gap: 24px; padding: 24px; background: linear-gradient(color-mix(in srgb, var(--hero, #535353) 25%, #121118), #121118 240px); }
 .content { padding: 0 24px 40px; }
 .play-big { width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #000; display: grid; place-items: center; transition: transform .1s, background .1s; }
-.play-big:hover { transform: scale(1.04); background: #3be477; }
+.play-big:hover { transform: scale(1.04); background: #d6ff5c; }
 .play-big .i { width: 28px; height: 28px; }
 .action-bar .icon-btn .i { width: 32px; height: 32px; }
 
@@ -132,7 +132,7 @@ input, textarea { font: inherit; color: inherit; }
 .card .s { font-size: 14px; color: var(--muted); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card .fab { position: absolute; right: 8px; bottom: 8px; width: 48px; height: 48px; border-radius: 50%; background: var(--accent); color: #000; display: grid; place-items: center; opacity: 0; transform: translateY(8px); transition: all .25s; box-shadow: 0 8px 8px #0000004d; }
 .card:hover .fab, .card .fab.on { opacity: 1; transform: none; }
-.card .fab:hover { transform: scale(1.05); background: #3be477; }
+.card .fab:hover { transform: scale(1.05); background: #d6ff5c; }
 
 /* atalhos do início */
 .greeting { font-size: 32px; font-weight: 800; margin: 0 0 20px; letter-spacing: -.02em; }
@@ -184,7 +184,7 @@ input, textarea { font: inherit; color: inherit; }
 .icon-btn.on.dot::after { content: ""; position: absolute; bottom: -6px; left: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); transform: translateX(-50%); }
 .like-btn.on { color: var(--accent); }
 .primary-btn { background: var(--accent); color: #000; font-weight: 700; padding: 12px 32px; border-radius: 99px; font-size: 16px; transition: transform .1s; }
-.primary-btn:hover { transform: scale(1.04); background: #3be477; }
+.primary-btn:hover { transform: scale(1.04); background: #d6ff5c; }
 .ghost-btn { border: 1px solid #727272; padding: 7px 16px; border-radius: 99px; font-weight: 700; font-size: 14px; }
 .ghost-btn:hover { border-color: var(--text); transform: scale(1.04); }
 
@@ -695,7 +695,7 @@ body.dragging .lib-item[href^="#/playlist/"], body.dragging .lib-item[href="#/li
 .selbar button:hover { background: #ffffff1a; color: #fff; }
 .selbar button .i { width: 16px; height: 16px; }
 .selbar button.hl { background: var(--accent); color: #000; }
-.selbar button.hl:hover { background: #3be477; }
+.selbar button.hl:hover { background: #d6ff5c; }
 .selbar button.x { padding: 8px; }
 
 /* seletor de playlists */
@@ -845,7 +845,7 @@ html { scrollbar-color: #ffffff26 transparent; }
 .latest > img, .latest > .ph { width: 112px; height: 112px; border-radius: 6px; flex: none; object-fit: cover; box-shadow: 0 8px 24px #00000080; }
 .latest small { display: block; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
 .latest b { display: block; font-size: 20px; font-weight: 800; line-height: 1.2; }
-.latest span { display: block; font-size: 13px; color: var(--muted); margin-top: 6px; }
+
 .latest-list h2 { font-size: 18px; margin: 0 0 6px; }
 .rel-card .art { position: relative; }
 .rel-card.have .art img { filter: saturate(.6) brightness(.75); }
@@ -939,3 +939,15 @@ html { scrollbar-color: #ffffff26 transparent; }
   .top-row .dur { display: none; }
   .action-bar .top-stats { display: none; }
 }
+
+/* nome do artista: rosa fluorescente, sempre clicável */
+.ar-link, a.ar-link, .np-artist, .nf-artist, .hero .sub .ar-link { color: #ff3cc7 !important; cursor: pointer; font-weight: 600; transition: text-shadow .2s, color .2s; }
+.ar-link:hover, .np-artist:hover, .nf-artist:hover { color: #ff6fd6 !important; text-shadow: 0 0 10px #ff3cc799; text-decoration: underline; }
+.tr.playing .ta .ar-link { color: #ff3cc7 !important; }
+
+/* botões redondos nunca achatam */
+.play-big, .fab, .icon-btn, .vol-step, .pv-btn, .rel-x, .dev-kick, .top-badge, .genre-badge { flex-shrink: 0; }
+.play-big, .fab, .vol-step, .rel-x { aspect-ratio: 1 / 1; }
+.action-bar { flex-wrap: wrap; }
+.latest > div > span { display: block; font-size: 13px; color: var(--muted); margin-top: 6px; }
+.latest span.new-tag { display: inline-block; margin-top: 0; font-size: 10px; color: var(--ink); }

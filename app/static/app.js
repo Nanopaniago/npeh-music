@@ -326,7 +326,7 @@ function updateNow() {
   $('#np-cover').src = src; $('#nf-cover').src = src; $('#nf-bg').style.backgroundImage = `url(${src})`;
   $('#np-title').textContent = t.title; $('#np-title').href = `#/album/${t.album_id}`;
   $('#np-artist').textContent = t.artist; $('#np-artist').href = `#/artist/${t.artist_id}`;
-  $('#nf-title').textContent = t.title; $('#nf-artist').textContent = t.artist;
+  $('#nf-title').textContent = t.title; $('#nf-artist').textContent = t.artist; $('#nf-artist').dataset.goto = `#/artist/${t.artist_id}`;
   $('#nf-context').textContent = t.radio ? 'Rádio automática · parecida com o que estavas a ouvir' : P.ctx?.label ? `A tocar de ${P.ctx.label}` : 'A tocar';
   updateLikeButtons();
   document.title = `${t.title} • ${t.artist}`;
@@ -563,7 +563,7 @@ function trackTable(tracks, ctx, { album = true, cover = true, numbers = 'index'
     html += `<div class="tr ${cls}" data-id="${t.id}" data-i="${i}" draggable="true" ${removable ? `data-entry="${t.entry_id}"` : ''}>
       <div class="n"><span>${n}</span><span class="eq"><b></b><b></b><b></b><b></b></span>${icon('play', 'i play')}</div>
       <div class="main-cell">${cover ? art(t.album_id, t.has_cover) : ''}<div style="min-width:0"><div class="tt">${esc(t.title)}${isOff(t.id) ? `<span class="off-mark" title="Disponível offline">${icon('offline')}</span>` : ''}</div>
-        <div class="ta"><a href="#/artist/${t.artist_id}">${esc(t.artist)}</a></div></div></div>
+        <div class="ta"><a class="ar-link" href="#/artist/${t.artist_id}">${esc(t.artist)}</a></div></div></div>
       ${album ? `<div class="alb"><a href="#/album/${t.album_id}">${esc(t.album || '')}</a></div>` : ''}
       <div class="dur"><button class="icon-btn add-btn" data-action="add-pl" title="Adicionar a uma playlist">${icon('addpl')}</button><button class="icon-btn like-btn ${t.liked ? 'on' : ''}" data-action="like">${icon(t.liked ? 'heart-fill' : 'heart')}</button><span class="t">${fmt(t.duration)}</span></div>
       <button class="icon-btn more" data-action="track-menu">${icon('more')}</button>
@@ -572,17 +572,19 @@ function trackTable(tracks, ctx, { album = true, cover = true, numbers = 'index'
   return html + '</div>';
 }
 
+// nome do artista: rosa fluorescente e sempre clicável (abre o perfil com todas as músicas e álbuns)
+const arLink = (name, id) => (id ? `<span class="ar-link" role="link" tabindex="0" data-goto="#/artist/${id}">${esc(name || '')}</span>` : esc(name || ''));
 function card({ href, artHtml, title, sub, playCtx, round = false }) {
   return `<div class="card" data-href="${href}">
     <div class="art">${artHtml}${playCtx ? `<button class="fab" data-action="play-ctx" data-play-ctx="${playCtx}" aria-label="Reproduzir">${icon('play')}</button>` : ''}</div>
     <div class="t" ${round ? 'style="text-align:left"' : ''}>${esc(title)}</div><div class="s">${sub}</div></div>`;
 }
-const albumCard = (a) => card({ href: `#/album/${a.id}`, artHtml: art(a.id, a.has_cover), title: a.title, sub: `${isNew(a.release_date) ? '<span class="new-tag">Novo</span>' : ''}${esc((a.release_date || a.year || '').slice(0, 4))}${a.release_date || a.year ? ' • ' : ''}${esc(a.artist)}`, playCtx: `album:${a.id}` });
+const albumCard = (a) => card({ href: `#/album/${a.id}`, artHtml: art(a.id, a.has_cover), title: a.title, sub: `${isNew(a.release_date) ? '<span class="new-tag">Novo</span>' : ''}${esc((a.release_date || a.year || '').slice(0, 4))}${a.release_date || a.year ? ' • ' : ''}${arLink(a.artist, a.artist_id)}`, playCtx: `album:${a.id}` });
 const artistCard = (a) => card({ href: `#/artist/${a.id}`, artHtml: artistArt(a), title: a.name, sub: 'Artista', playCtx: `artist:${a.id}`, round: true });
 const playlistCard = (p) => card({ href: `#/playlist/${p.id}`, artHtml: playlistArt(p), title: p.name, sub: `${p.synced ? `<span class="sync-ic" title="Sincronizada">${icon('refresh')}</span>` : ''}Playlist • ${plural(p.track_count, 'música', 'músicas')}`, playCtx: `playlist:${p.id}` });
 const trackCard = (t, key, i) => `<div class="card" data-action="play-from" data-list="${key}" data-i="${i}">
     <div class="art">${art(t.album_id, t.has_cover)}<button class="fab" data-action="play-from" data-list="${key}" data-i="${i}">${icon('play')}</button></div>
-    <div class="t">${esc(t.title)}</div><div class="s">${esc(t.artist)}</div></div>`;
+    <div class="t">${esc(t.title)}</div><div class="s">${arLink(t.artist, t.artist_id)}</div></div>`;
 
 function section(title, inner, moreHref) {
   return `<section class="section"><div class="section-head"><h2>${esc(title)}</h2>${moreHref ? `<a href="${moreHref}">Mostrar tudo</a>` : ''}</div>${inner}</section>`;
@@ -809,7 +811,7 @@ async function loadReleases() {
       <img class="rel-cover" src="${esc(x.cover || '')}" alt="" loading="lazy">
       <div class="rel-info">
         <small>${seenRel().has(x.id) ? '' : '<span class="new-tag">Novo</span>'}Novo lançamento · ${x.kind === 'single' ? 'Single' : x.kind === 'ep' ? 'EP' : 'Álbum'} · ${esc(fmtRelease(x.release_date))}</small>
-        <b>${esc(x.title)}</b><a href="#/artist/${x.artist_id}">${esc(x.artist)}</a>
+        <b>${esc(x.title)}</b><a class="ar-link" href="#/artist/${x.artist_id}">${esc(x.artist)}</a>
         <div class="rel-acts">
           <button class="primary-btn sm" data-action="rel-play" data-i="${i}">${icon('play')} ${x.album_id ? 'Ouvir agora' : NR.waiting.has(x.id) || x.queued ? 'A descarregar…' : 'Ouvir agora'}</button>
           ${x.album_id ? '' : `<button class="ghost-btn sm" data-action="rel-preview" data-i="${i}">${icon('play')} Prévia</button>`}
@@ -872,6 +874,15 @@ async function loadArtistReleases(id) {
     <div class="card rel-card ${al.in_library ? 'have' : ''}">
       <div class="art">${dlImg(al.cover)}${al.in_library ? `<span class="rel-have">${icon('check')}Na biblioteca</span>` : `<button class="fab dl" data-action="rel-dl" data-i="${i}" title="Descarregar">${icon('download')}</button>`}</div>
       <div class="t">${esc(al.title)}</div><div class="s">${isNew(al.release_date) ? '<span class="new-tag">Novo</span>' : ''}${esc(fmtRelease(al.release_date))} · ${esc(al.kind === 'single' ? 'Single' : al.kind === 'ep' ? 'EP' : 'Álbum')}</div></div>`).join('')}</div>`);
+}
+
+async function openArtistByName(name, dzId) {
+  const main = String(name).split(/,|;| feat\.? | ft\.? | & /i)[0].trim().toLowerCase();
+  let ars = []; try { ars = await api('/artists'); } catch { /* */ }
+  const hit = ars.find((a) => a.name.toLowerCase() === main) || ars.find((a) => a.name.toLowerCase() === String(name).toLowerCase());
+  if (hit) { location.hash = `#/artist/${hit.id}`; return; }
+  if (dzId) { if (route.name !== 'downloads') { location.hash = '#/downloads'; await new Promise((r) => setTimeout(r, 400)); } dlOpen('artist', dzId); return; }
+  toast(`${name} ainda não está na biblioteca`);
 }
 
 function greeting() { const h = new Date().getHours(); return h < 6 ? 'Boa noite' : h < 13 ? 'Bom dia' : h < 20 ? 'Boa tarde' : 'Boa noite'; }
@@ -947,7 +958,7 @@ const VIEWS = {
     view.innerHTML = `
       <div class="hero">${art(id, a.has_cover, 'hero-cover')}<div style="min-width:0">
         <div class="kind">Álbum</div><h1 class="${a.title.length > 24 ? 'long' : ''}">${esc(a.title)}</h1>
-        <div class="sub"><a href="#/artist/${a.artist_id}">${esc(a.artist)}</a>${a.year ? `<span class="dot">${esc(a.year)}</span>` : ''}
+        <div class="sub"><a class="ar-link" href="#/artist/${a.artist_id}">${esc(a.artist)}</a>${a.year ? `<span class="dot">${esc(a.year)}</span>` : ''}
         <span class="dot">${plural(a.track_count, 'música', 'músicas')}, ${fmtLong(a.duration)}</span></div></div></div>
       <div class="action-bar">
         <button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
@@ -1041,11 +1052,16 @@ const VIEWS = {
           <div class="latest-list"><h2>Mais recentes</h2>${trackTable(a.recent_tracks.slice(0, 5), ctx, { head: false, album: false })}</div></section>` : ''}
         ${a.top_tracks.length ? section('Populares', trackTable(a.top_tracks, ctx, { head: false })) : ''}
         <div id="artist-releases"></div>
+        <div id="artist-all"></div>
         ${a.albums.length ? section('Discografia (do mais recente)', `<div class="grid">${a.albums.map(albumCard).join('')}</div>`) : ''}
         ${a.appears_on.length ? section('Aparece em', `<div class="grid row">${a.appears_on.map(albumCard).join('')}</div>`) : ''}
       </div>`;
     heroColor(a.cover_album ? coverUrl(a.cover_album) : null);
     loadArtistReleases(id);
+    api(`/artists/${id}/tracks`).then((all) => {
+      const box = $('#artist-all'); if (!box || route.name !== 'artist' || route.arg !== String(id) || !all.length) return;
+      box.innerHTML = section(`Todas as músicas · ${all.length}`, trackTable(all, ctx));
+    }).catch(() => {});
   },
 
   async playlist(id) {
@@ -1389,7 +1405,7 @@ function dlRow(t, i) {
   return `<div class="dl-row" data-key="${key}">
     <button class="pv-btn" data-action="pv" data-i="${i}" ${t.preview ? '' : 'disabled'} aria-label="Pré-ouvir ${esc(t.title)}">${dlImg(t.cover)}<span class="pv-ico">${icon('play')}</span></button>
     <div class="meta"><div class="t">${esc(t.title)}${t.explicit ? ' <span class="tag-e" title="Conteúdo explícito">E</span>' : ''}</div>
-      <div class="s">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div></div>
+      <div class="s"><span class="ar-link" role="link" tabindex="0" data-dz-artist="${esc(t.artist)}" data-dz-id="${t.artist_id || ''}">${esc(t.artist)}</span>${t.album ? ' · ' + esc(t.album) : ''}</div></div>
     <span class="dur">${fmt(t.duration)}</span>${state}<div class="pv-bar"><div></div></div></div>`;
 }
 const dlAlbumCard = (a, i) => `<div class="card dl-card" data-action="dl-open" data-kind="album" data-id="${a.id}">
@@ -1613,6 +1629,10 @@ setInterval(async () => {
 document.addEventListener('click', async (e) => {
   const lyLine = e.target.closest('.ly-line');
   if (lyLine) { seekTo(+lyLine.dataset.t); return; }
+  const goto = e.target.closest('[data-goto]');
+  if (goto) { e.preventDefault(); e.stopPropagation(); if (!$('#now-full').hidden) closeNow(); location.hash = goto.dataset.goto; return; }
+  const dza = e.target.closest('[data-dz-artist]');
+  if (dza) { e.preventDefault(); e.stopPropagation(); openArtistByName(dza.dataset.dzArtist, dza.dataset.dzId); return; }
   const vb = e.target.closest('[data-vol]');
   if (vb) { e.preventDefault(); e.stopPropagation(); stepVolume(+vb.dataset.vol); return; }
   const mItem = e.target.closest('#menu [data-m], #modal [data-m]');
@@ -2209,7 +2229,7 @@ function renderRemote() {
     }
     $('#np-title').textContent = t.title; $('#np-title').href = `#/album/${t.album_id}`;
     $('#np-artist').textContent = t.artist; $('#np-artist').href = `#/artist/${t.artist_id}`;
-    $('#nf-title').textContent = t.title; $('#nf-artist').textContent = t.artist;
+    $('#nf-title').textContent = t.title; $('#nf-artist').textContent = t.artist; $('#nf-artist').dataset.goto = `#/artist/${t.artist_id}`;
   } else { $('#np-title').textContent = 'Nada a tocar'; $('#np-artist').textContent = ''; $('#nf-title').textContent = 'Nada a tocar'; $('#nf-artist').textContent = d.name; }
   $('#nf-context').textContent = `A controlar: ${d.name}`;
   const pos = remotePos(d), dur = s.dur || t?.duration || 0;
