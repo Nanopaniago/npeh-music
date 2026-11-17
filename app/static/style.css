@@ -906,3 +906,36 @@ html { scrollbar-color: #ffffff26 transparent; }
 .now-full header .icon-btn .i { width: 20px; height: 20px; }
 .now-full header #nf-context { flex: 1; min-width: 0; text-align: center; }
 .nf-hacts { flex: none; }
+
+/* Top 100 Global */
+.top-badge { width: 232px; height: 232px; flex: none; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--ink);
+  background: radial-gradient(120% 90% at 20% 10%, var(--citric), #9bf0e1 45%, #4100f5 100%); box-shadow: 0 8px 40px #00000099, 0 0 80px #4100f566; }
+.top-badge b { font-size: 92px; font-weight: 900; letter-spacing: -.05em; line-height: .9; }
+.top-badge small { font-size: 16px; font-weight: 900; letter-spacing: .35em; margin-top: 6px; }
+.top-badge.sm { width: 64px; height: 64px; border-radius: 8px; box-shadow: none; }
+.top-badge.sm b { font-size: 26px; } .top-badge.sm small { font-size: 7px; letter-spacing: .25em; margin-top: 2px; }
+.src-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.src-chip { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 99px; background: #ffffff14; border: 1px solid #ffffff1f; }
+.src-chip:hover { background: #ffffff26; }
+.top-stats { color: var(--muted); font-size: 14px; } .top-stats b { color: #fff; }
+.top-row { display: flex; align-items: center; gap: 10px; }
+.top-row .dl-row { flex: 1; min-width: 0; }
+.top-rank { width: 34px; flex: none; text-align: right; font-weight: 900; font-size: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.top-rank.p1 { color: var(--citric); text-shadow: 0 0 14px #c8ff2e88; } .top-rank.p2 { color: var(--aqua); } .top-rank.p3 { color: var(--fuchsia); }
+.top-src { display: flex; gap: 4px; flex: none; width: 128px; justify-content: flex-end; }
+.src-pos { font-size: 11px; font-weight: 800; padding: 2px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.src-pos.src-spotify { background: #1db95426; color: #4ee08a; }
+.src-pos.src-apple { background: #fa243c26; color: #ff6b7d; }
+.src-pos.src-deezer { background: #a238ff26; color: #c58bff; }
+.dl-btn.ok { color: var(--ink); background: var(--accent); border-color: transparent; }
+.top-promo { display: flex; align-items: center; gap: 14px; padding: 12px 16px 12px 12px; margin: 22px 0 6px; border-radius: 12px; background: linear-gradient(110deg, #4100f533, #ffffff08 70%); border: 1px solid #ffffff14; transition: background .2s; }
+.top-promo:hover { background: linear-gradient(110deg, #4100f555, #ffffff10 70%); }
+.top-promo > div:nth-child(2) { flex: 1; min-width: 0; }
+.top-promo b { display: block; font-size: 17px; font-weight: 800; }
+.top-promo span { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+@media (max-width: 760px) {
+  .top-badge { width: 160px; height: 160px; } .top-badge b { font-size: 64px; } .top-badge small { font-size: 12px; }
+  .top-src { display: none; } .top-rank { width: 24px; font-size: 15px; }
+  .top-row .dur { display: none; }
+  .action-bar .top-stats { display: none; }
+}

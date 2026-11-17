@@ -764,7 +764,7 @@ let route = { name: 'home' };
 const routes = [
   [/^\/?$/, 'home'], [/^\/search$/, 'search'], [/^\/library$/, 'library'], [/^\/album\/(\d+)$/, 'album'],
   [/^\/artist\/(\d+)$/, 'artist'], [/^\/playlist\/(\d+)$/, 'playlist'], [/^\/liked$/, 'liked'],
-  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/duplicates$/, 'duplicates'], [/^\/genres$/, 'genres'], [/^\/genre\/(.+)$/, 'genre'], [/^\/offline$/, 'offline'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
+  [/^\/downloads$/, 'downloads'], [/^\/settings$/, 'settings'], [/^\/duplicates$/, 'duplicates'], [/^\/genres$/, 'genres'], [/^\/top$/, 'top'], [/^\/genre\/(.+)$/, 'genre'], [/^\/offline$/, 'offline'], [/^\/songs$/, 'songs'], [/^\/albums$/, 'albums'], [/^\/artists$/, 'artists'],
 ];
 
 async function render() {
@@ -795,6 +795,7 @@ async function heroColor(src) {
 
 // ------------------------------------------------------------------ novos lançamentos dos teus artistas
 const NR = { items: [], waiting: new Set() };
+const TOP = { data: null, refresh: false };
 const seenRel = () => new Set(store.get('rel_seen', []));
 async function loadReleases() {
   let r; try { r = await api('/releases'); } catch { return; }
@@ -896,6 +897,7 @@ const VIEWS = {
       const k = registerList(d.recently_played, { key: 'recent', label: 'Tocadas recentemente' });
       html += section('Tocadas recentemente', `<div class="grid row">${d.recently_played.map((t, i) => trackCard(t, k, i)).join('')}</div>`);
     }
+    html += `<a class="top-promo" href="#/top"><div class="top-badge sm"><b>100</b><small>GLOBAL</small></div><div><b>Top 100 Global</b><span>O que o mundo está a ouvir agora · Spotify, Apple Music e Deezer</span></div>${icon('right')}</a>`;
     if (d.new_releases?.length) html += section('Lançamentos recentes', `<div class="grid row">${d.new_releases.map(albumCard).join('')}</div>`, '#/albums?sort=release');
     if (d.genres?.length > 1) html += section('Os teus géneros', `<div class="genre-row">${d.genres.slice(0, 8).map(genreTile).join('')}</div>`, '#/genres');
     html += section('Adicionados recentemente', `<div class="grid row">${d.recent_albums.map(albumCard).join('')}</div>`, '#/albums');
@@ -957,6 +959,35 @@ const VIEWS = {
         ${a.more.length ? section(`Mais de ${a.artist}`, `<div class="grid row">${a.more.map(albumCard).join('')}</div>`, `#/artist/${a.artist_id}`) : ''}
       </div>`;
     heroColor(src);
+  },
+
+  async top(refresh) {
+    view.innerHTML = `<div class="view-inner"><h1 class="page-title">Top 100 Global</h1><div class="label">A juntar os rankings do Spotify, da Apple Music e do Deezer…</div></div>`;
+    let d; try { d = await api('/charts/global' + (TOP.refresh ? '?refresh=1' : '')); } catch (e) { view.innerHTML = `<div class="view-inner"><h1 class="page-title">Top 100 Global</h1><div class="label">${esc(e.message)}</div></div>`; return; }
+    TOP.refresh = false;
+    if (route.name !== 'top') return;
+    dl.tracks = d.tracks; TOP.data = d;
+    const have = d.tracks.filter((t) => t.in_library).length, missing = d.tracks.filter((t) => !t.in_library && !t.pending && t.id);
+    const src = Object.entries(d.sources).map(([k, v]) => `<a href="${v.url}" target="_blank" rel="noopener" class="src-chip src-${k}">${esc(v.name)}</a>`).join('');
+    const badge = (k, pos) => pos ? `<span class="src-pos src-${k}" title="${esc(d.sources[k]?.name || k)}: ${pos}.º">${k[0].toUpperCase()}${pos}</span>` : '';
+    view.innerHTML = `
+      <div class="hero top-hero"><div class="top-badge"><b>100</b><small>GLOBAL</small></div><div style="min-width:0">
+        <div class="kind">Ranking mundial</div><h1>Top 100 Global</h1>
+        <div class="sub">As músicas mais tocadas no mundo agora, juntando os três rankings oficiais. Atualizado ${new Date(d.updated * 1000).toLocaleString('pt-PT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.</div>
+        <div class="src-chips">${src}</div></div></div>
+      <div class="action-bar">
+        <button class="play-big" data-action="top-play" title="Tocar as que tenho" ${have ? '' : 'disabled'}>${icon('play')}</button>
+        <div class="top-stats"><b>${have}</b> na biblioteca · <b>${missing.length}</b> por descarregar</div>
+        ${missing.length ? `<button class="primary-btn sm" data-action="top-dl">${icon('download')} Descarregar as ${missing.length} que faltam</button>` : ''}
+        <button class="ghost-btn sm" data-action="top-refresh">${icon('refresh')} Atualizar</button>
+      </div>
+      <div class="content"><div class="dl-list top-list">${d.tracks.map((t, i) => `<div class="top-row"><span class="top-rank ${i < 3 ? 'p' + (i + 1) : ''}">${t.rank}</span>
+        ${t.in_library ? dlRow(t, i).replace('<span class="dl-state ok"', `<button class="dl-btn ok" data-action="top-one" data-i="${i}">${icon('play')}<span>Tocar</span></button><span hidden class="dl-state ok"`) : dlRow(t, i)}
+        <span class="top-src">${badge('spotify', t.sources.spotify)}${badge('apple', t.sources.apple)}${badge('deezer', t.sources.deezer)}</span></div>`).join('')}</div>
+        <p class="dl-hint" style="margin-top:18px">Como é calculado: cada música ganha pontos pela posição em cada ranking (Spotify Top 50 Global, Apple Music Top 100: Global e Deezer Top Mundial) e um bónus por estar em mais de uma plataforma. Atualiza sozinho a cada 6 horas.${Object.keys(d.errors || {}).length ? ` Agora sem: ${Object.keys(d.errors).join(', ')}.` : ''}</p>
+      </div>`;
+    view.style.setProperty('--hero', '#4100f5');
+    markPreview?.();
   },
 
   async genres() {
@@ -1718,6 +1749,15 @@ document.addEventListener('click', async (e) => {
       case 'dl-back': stopPreview(); dl.view = dl.stack.pop() || null; renderDl(); break;
       case 'pv': togglePreview(dl.tracks[+a.dataset.i]); break;
       case 'dl-track': { const t = dl.tracks[+a.dataset.i]; dlQueue([t], `${t.title} — ${t.artist}`).catch((err) => toast(err.message)); break; }
+      case 'top-play': case 'top-one': {
+        const libT = TOP.data.tracks.filter((t) => t.in_library);
+        const ids = libT.map((t) => t.library_id);
+        const q = await api('/tracks/by-ids', { json: { ids } });
+        const start = a.dataset.action === 'top-one' ? Math.max(0, q.findIndex((t) => t.id === dl.tracks[+a.dataset.i].library_id)) : 0;
+        playList(q, start, { key: 'top', label: 'Top 100 Global', href: '#/top' }); break;
+      }
+      case 'top-dl': { const miss = TOP.data.tracks.filter((t) => !t.in_library && !t.pending && t.id); dlQueue(miss, 'Top 100 Global').then(() => refreshView()).catch((err) => toast(err.message)); break; }
+      case 'top-refresh': TOP.refresh = true; refreshView(); break;
       case 'rel-play': { const x = NR.items[+a.dataset.i]; if (x) relPlay(x); break; }
       case 'rel-preview': { const x = NR.items[+a.dataset.i]; if (x) relPreview(x); break; }
       case 'rel-dismiss': { const x = NR.items[+a.dataset.i]; if (!x) break; api(`/releases/${x.id}/dismiss`, { json: {} }).then(loadReleases); break; }

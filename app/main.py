@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import catalog, discover, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import catalog, charts, discover, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -280,6 +280,24 @@ async def artist_releases(artist_id: int):
         return await asyncio.to_thread(discover.latest_releases, a["name"])
     except Exception as e:  # noqa
         return {"artist": None, "releases": [], "error": str(e)}
+
+
+@app.post("/api/tracks/by-ids")
+def tracks_by_ids(ids: list[int] = Body(..., embed=True)):
+    ids = [int(i) for i in ids][:500]
+    if not ids:
+        return []
+    found = {t["id"]: t for t in tracks_q(f"t.id IN ({','.join('?' * len(ids))})", tuple(ids))}
+    return [found[i] for i in ids if i in found]
+
+
+# ---------------------------------------------------------------- top 100 global
+@app.get("/api/charts/global")
+async def chart_global(refresh: int = 0):
+    try:
+        return await asyncio.to_thread(charts.get, bool(refresh))
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"Não foi possível obter o Top 100 Global ({e})")
 
 
 # ---------------------------------------------------------------- novos lançamentos
