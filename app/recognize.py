@@ -43,7 +43,16 @@ def _to_wav(raw: bytes) -> bytes:
 
 async def _shazam(wav: bytes):
     from shazamio import Shazam   # importado só quando é preciso
-    out = await Shazam().recognize(wav)
+    shz = Shazam()
+    try:
+        out = await shz.recognize(wav)
+    finally:
+        close = getattr(shz, "close", None)
+        if close:
+            try:
+                await close()
+            except Exception:  # noqa
+                pass
     t = out.get("track") if isinstance(out, dict) else None
     if not t:
         return None
