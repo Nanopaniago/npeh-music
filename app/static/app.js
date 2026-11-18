@@ -390,6 +390,148 @@ function onTime() {
     }
   }
 }
+
+// ------------------------------------------------------------------ identificar música (tipo Shazam)
+// Grava alguns segundos do microfone, o servidor compara com o catálogo do Shazam e procura no Deezer.
+const SHZ = { state: 'idle', stream: null, rec: null, chunks: [], actx: null, an: null, data: null, raf: 0, t0: 0, ang: -2.2, tries: [], level: 0, result: null };
+const NS = 'http://www.w3.org/2000/svg';
+const TICKS = 72;
+function shzBuild() {
+  const g = $('#shz-ticks'); if (g.childElementCount) return;
+  for (let i = 0; i < TICKS; i++) {
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('stroke-linecap', 'round'); l.setAttribute('stroke-width', '3');
+    g.appendChild(l);
+  }
+  const sw = $('#shz-sweep');
+  for (let i = 0; i < 6; i++) { const l = document.createElementNS(NS, 'line'); l.setAttribute('stroke-linecap', 'round'); l.setAttribute('stroke-width', i === 3 ? '3.4' : '2.2'); sw.appendChild(l); }
+  for (let i = 0; i < 2; i++) $('#shz-dash').appendChild(document.createElementNS(NS, 'line'));
+}
+const pol = (r, a) => [200 + r * Math.cos(a), 200 + r * Math.sin(a)];
+function shzDraw() {
+  const now = performance.now();
+  const listening = SHZ.state === 'listening';
+  SHZ.ang += listening ? 0.022 : 0.004;
+  // nível do microfone (0..1) e espectro para os traços
+  let bins = null;
+  if (SHZ.an && listening) {
+    SHZ.an.getByteFrequencyData(SHZ.data); bins = SHZ.data;
+    let sum = 0; for (let i = 0; i < 64; i++) sum += SHZ.data[i]; SHZ.level = SHZ.level * 0.8 + (sum / 64 / 255) * 0.2;
+  } else SHZ.level *= 0.92;
+  const prog = listening ? Math.min(1, (now - SHZ.t0) / 18000) : SHZ.state === 'found' ? 1 : 0;
+  const ticks = $('#shz-ticks').children;
+  for (let i = 0; i < TICKS; i++) {
+    const a = (i / TICKS) * Math.PI * 2 - Math.PI / 2;
+    const v = bins ? bins[2 + Math.floor((i % (TICKS / 2)) * 1.3)] / 255 : 0;
+    const len = 9 + v * 16 + (listening ? Math.sin(now / 300 + i) * 1.2 : 0);
+    const [x1, y1] = pol(176, a), [x2, y2] = pol(176 + len, a);
+    const done = i / TICKS < prog;
+    const l = ticks[i];
+    l.setAttribute('x1', x1); l.setAttribute('y1', y1); l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+    l.setAttribute('stroke', done ? '#ffffff' : '#ffffff');
+    l.setAttribute('opacity', (done ? 0.95 : 0.38) + v * 0.4);
+  }
+  // varrimento: feixe de traços longos, um deles citric
+  const sw = $('#shz-sweep').children;
+  for (let i = 0; i < sw.length; i++) {
+    const a = SHZ.ang + (i - 2.5) * 0.075;
+    const r1 = 112 + (i === 3 ? 0 : 14), r2 = 168 - Math.abs(i - 3) * 8 + (i === 3 ? SHZ.level * 30 : 0);
+    const [x1, y1] = pol(r1, a), [x2, y2] = pol(r2, a);
+    sw[i].setAttribute('x1', x1); sw[i].setAttribute('y1', y1); sw[i].setAttribute('x2', x2); sw[i].setAttribute('y2', y2);
+    sw[i].setAttribute('stroke', i === 3 ? '#c8ff2e' : '#ffffff');
+    sw[i].setAttribute('opacity', i === 3 ? 1 : 0.85 - Math.abs(i - 3) * 0.12);
+  }
+  // fatia escura entre o disco e o anel, e as duas linhas tracejadas
+  const a1 = SHZ.ang - 1.25, a2 = SHZ.ang + 0.15;
+  const [ox1, oy1] = pol(104, a1), [ox2, oy2] = pol(104, a2), [ix2, iy2] = pol(84, a2), [ix1, iy1] = pol(84, a1);
+  $('#shz-wedge').setAttribute('d', `M${ox1} ${oy1} A104 104 0 0 1 ${ox2} ${oy2} L${ix2} ${iy2} A84 84 0 0 0 ${ix1} ${iy1} Z`);
+  const dl = $('#shz-dash').children;
+  [[a1, 190], [a2 + 0.9, 196]].forEach(([a, r], k) => { const [x1, y1] = pol(104, a), [x2, y2] = pol(r, a); dl[k].setAttribute('x1', x1); dl[k].setAttribute('y1', y1); dl[k].setAttribute('x2', x2); dl[k].setAttribute('y2', y2); });
+  $('.shz-disc').style.transform = `scale(${1 + SHZ.level * 0.06})`;
+  if (!$('#shz').hidden) SHZ.raf = requestAnimationFrame(shzDraw);
+}
+function shzText(head, sub) { $('#shz-head').textContent = head; $('#shz-sub').textContent = sub; }
+async function openShazam() {
+  shzBuild(); $('#shz').hidden = false; document.body.classList.add('shz-open');
+  SHZ.state = 'idle'; $('#shz-result').hidden = true; $('#shz').classList.remove('found');
+  shzText('Toca para identificar', 'O nPlay ouve à tua volta e diz-te que música é');
+  cancelAnimationFrame(SHZ.raf); SHZ.raf = requestAnimationFrame(shzDraw);
+  shzHistory();
+}
+function closeShazam() { shzStop(); $('#shz').hidden = true; document.body.classList.remove('shz-open'); cancelAnimationFrame(SHZ.raf); }
+function shzStop() {
+  SHZ.tries.forEach(clearTimeout); SHZ.tries = [];
+  try { if (SHZ.rec?.state === 'recording') SHZ.rec.stop(); } catch { /* */ }
+  SHZ.stream?.getTracks().forEach((t) => t.stop()); SHZ.stream = null;
+  try { SHZ.actx?.close(); } catch { /* */ } SHZ.actx = null; SHZ.an = null;
+  $('#shz').classList.remove('listening');
+}
+async function shzListen() {
+  if (SHZ.state === 'listening') { shzStop(); SHZ.state = 'idle'; shzText('Toca para identificar', 'Cancelado'); return; }
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('Este browser não deixa usar o microfone');
+  try {
+    SHZ.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch { return toast('Sem acesso ao microfone — autoriza nas definições do browser'); }
+  const playingHere = !audio.paused; if (playingHere) userPause();          // não te ouvir a ti próprio
+  const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg'].find((m) => MediaRecorder.isTypeSupported?.(m)) || '';
+  SHZ.rec = new MediaRecorder(SHZ.stream, mime ? { mimeType: mime } : undefined);
+  SHZ.chunks = [];
+  SHZ.rec.ondataavailable = (e) => { if (e.data?.size) SHZ.chunks.push(e.data); };
+  SHZ.rec.start(500);
+  SHZ.actx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = SHZ.actx.createMediaStreamSource(SHZ.stream);
+  SHZ.an = SHZ.actx.createAnalyser(); SHZ.an.fftSize = 256; SHZ.data = new Uint8Array(SHZ.an.frequencyBinCount); src.connect(SHZ.an);
+  SHZ.state = 'listening'; SHZ.t0 = performance.now(); SHZ.result = null; SHZ.busy = false;
+  $('#shz').classList.add('listening'); $('#shz').classList.remove('found'); $('#shz-result').hidden = true;
+  shzText('A ouvir…', 'Aproxima o telemóvel da música');
+  // tenta aos 6, 11 e 17 segundos com tudo o que já ouviu
+  SHZ.tries = [6000, 11000, 17000].map((ms, k) => setTimeout(() => shzSend(k === 2), ms));
+}
+async function shzSend(last) {
+  if (SHZ.state !== 'listening' || SHZ.busy) { if (last && SHZ.state === 'listening') setTimeout(() => shzSend(true), 1500); return; }
+  SHZ.busy = true;
+  const blob = new Blob(SHZ.chunks, { type: SHZ.rec?.mimeType || 'audio/webm' });
+  if (!last) shzText('A ouvir…', 'A comparar com milhões de músicas');
+  let r = null;
+  try {
+    const res = await fetch('/api/recognize', { method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'application/octet-stream' } });
+    r = res.ok ? await res.json() : { error: (await res.json().catch(() => ({}))).detail || `Erro ${res.status}` };
+  } catch { r = { error: 'Sem ligação ao servidor' }; }
+  SHZ.busy = false;
+  if (SHZ.state !== 'listening') return;
+  if (r?.found) { shzStop(); SHZ.state = 'found'; shzShow(r); shzHistory(); return; }
+  if (last || r?.error) {
+    shzStop(); SHZ.state = 'idle';
+    shzText(r?.error ? 'Não consegui identificar' : 'Não reconheci esta música', r?.error || 'Tenta mais perto da fonte do som ou numa parte com voz');
+  }
+}
+function shzShow(r) {
+  SHZ.result = r;
+  const t = r.track;
+  $('#shz').classList.add('found');
+  shzText('Encontrei!', `${r.title} · ${r.artist}`);
+  const box = $('#shz-result');
+  box.innerHTML = `<div class="shz-card glass">
+      <img src="${esc((t && t.cover) || r.cover || '/static/icons/icon-192.png')}" alt="">
+      <div class="shz-info"><b>${esc(r.title)}</b><span class="ar-link" role="link" tabindex="0" data-dz-artist="${esc(r.artist)}" data-dz-id="${t?.artist_id || ''}">${esc(r.artist)}</span>
+        ${t?.album ? `<small>${esc(t.album)}</small>` : ''}</div>
+      <div class="shz-acts">
+        ${r.library_id ? `<button class="primary-btn sm" data-action="shz-play">${icon('play')} Tocar</button>` : ''}
+        ${t?.preview ? `<button class="ghost-btn sm" data-action="shz-preview">${icon('play')} Prévia</button>` : ''}
+        ${!r.library_id && t?.in_library ? `<span class="shz-have">${icon('check')} Já está na biblioteca</span>` : ''}
+        ${!r.library_id && !t?.in_library && t?.id ? `<button class="${r.library_id ? 'ghost-btn' : 'primary-btn'} sm" data-action="shz-dl">${icon('download')} ${t.pending ? 'Na fila' : 'Descarregar'}</button>` : ''}
+        <button class="ghost-btn sm" data-action="shz-go">${icon('listen')} Outra</button>
+      </div></div>`;
+  box.hidden = false;
+}
+async function shzHistory() {
+  let h = []; try { h = await api('/recognize/history'); } catch { return; }
+  $('#shz-hist').innerHTML = h.length ? `<small>Identificadas recentemente</small><div class="shz-hrow">${h.map((x, i) => `
+    <button class="shz-h" data-action="shz-hist" data-i="${i}"><img src="${esc(x.cover || '/static/icons/icon-192.png')}" alt=""><b>${esc(x.title)}</b><span>${esc(x.artist)}</span></button>`).join('')}</div>` : '<small>As músicas que identificares aparecem aqui.</small>';
+  SHZ.hist = h;
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#shz').hidden) closeShazam(); });
+
 // ------------------------------------------------------------------ carro / Bluetooth: retoma ao voltar a ligar
 // Quando o telemóvel liga ao CarPlay (ou a um Bluetooth), o sistema muda a saída de áudio. Se a música tinha sido
 // pausada pelo sistema (não por ti) nas últimas 3 horas, volta a tocar exatamente onde estava.
@@ -1769,6 +1911,18 @@ document.addEventListener('click', async (e) => {
       case 'dl-back': stopPreview(); dl.view = dl.stack.pop() || null; renderDl(); break;
       case 'pv': togglePreview(dl.tracks[+a.dataset.i]); break;
       case 'dl-track': { const t = dl.tracks[+a.dataset.i]; dlQueue([t], `${t.title} — ${t.artist}`).catch((err) => toast(err.message)); break; }
+      case 'shazam': e.preventDefault(); openShazam(); break;
+      case 'shz-close': closeShazam(); break;
+      case 'shz-go': shzListen(); break;
+      case 'shz-preview': if (SHZ.result?.track) togglePreview(SHZ.result.track); break;
+      case 'shz-play': { const q = await api('/tracks/by-ids', { json: { ids: [SHZ.result.library_id] } }); closeShazam(); playList(q, 0, { key: 'shazam', label: 'Identificada pelo nPlay' }); break; }
+      case 'shz-dl': if (SHZ.result?.track) dlQueue([SHZ.result.track], `Identificada: ${SHZ.result.title}`).then(() => { a.innerHTML = `${icon('check')} Na fila`; a.disabled = true; }).catch((err) => toast(err.message)); break;
+      case 'shz-hist': {
+        const x = SHZ.hist?.[+a.dataset.i]; if (!x) break;
+        let t = null; try { t = (await api(`/discover/search?type=track&q=${encodeURIComponent(x.artist + ' ' + x.title)}`)).items?.[0] || null; } catch { /* */ }
+        shzShow({ found: true, title: x.title, artist: x.artist, cover: x.cover, track: t, library_id: null });
+        break;
+      }
       case 'top-play': case 'top-one': {
         const libT = TOP.data.tracks.filter((t) => t.in_library);
         const ids = libT.map((t) => t.library_id);

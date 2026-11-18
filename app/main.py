@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import catalog, charts, discover, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -82,6 +82,7 @@ def _after_job(job_id: int):
 async def lifespan(app):
     migrated = init_db()
     releases.init()
+    recognize.init()
     downloader.AFTER_JOB.append(_after_job)
     canvasgen.start()
     tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop()),
@@ -289,6 +290,26 @@ def tracks_by_ids(ids: list[int] = Body(..., embed=True)):
         return []
     found = {t["id"]: t for t in tracks_q(f"t.id IN ({','.join('?' * len(ids))})", tuple(ids))}
     return [found[i] for i in ids if i in found]
+
+
+# ---------------------------------------------------------------- identificar música (microfone)
+@app.post("/api/recognize")
+async def recognize_song(request: Request):
+    raw = await request.body()
+    if len(raw) < 2000:
+        raise HTTPException(400, "Gravação demasiado curta")
+    if len(raw) > 6_000_000:
+        raise HTTPException(413, "Gravação demasiado grande")
+    try:
+        return await recognize.identify(raw)
+    except Exception as e:  # noqa
+        logging.getLogger("recognize").warning("falhou: %s", e)
+        raise HTTPException(502, f"Não foi possível identificar ({e})")
+
+
+@app.get("/api/recognize/history")
+def recognize_history():
+    return recognize.history()
 
 
 # ---------------------------------------------------------------- top 100 global

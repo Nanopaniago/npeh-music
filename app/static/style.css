@@ -951,3 +951,60 @@ html { scrollbar-color: #ffffff26 transparent; }
 .action-bar { flex-wrap: wrap; }
 .latest > div > span { display: block; font-size: 13px; color: var(--muted); margin-top: 6px; }
 .latest span.new-tag { display: inline-block; margin-top: 0; font-size: 10px; color: var(--ink); }
+
+/* =====================================================================
+   Identificar música — ecrã inteiro, mostrador + vidro líquido
+   ===================================================================== */
+.glass { background: linear-gradient(160deg, #ffffff1f, #ffffff08 45%, #ffffff12); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  border: 1px solid #ffffff26; box-shadow: inset 0 1px 0 #ffffff40, inset 0 -1px 0 #ffffff10, 0 20px 50px #00000080; }
+.glass-btn { width: 44px; height: 44px; flex: none; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(160deg, #ffffff2a, #ffffff0a); backdrop-filter: blur(20px) saturate(1.5); -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid #ffffff30; box-shadow: inset 0 1px 0 #ffffff50, 0 8px 24px #0006; transition: transform .15s; }
+.glass-btn:active { transform: scale(.94); }
+.glass-btn .i { width: 22px; height: 22px; }
+.listen-btn .i, .nav-listen .i { color: var(--citric); }
+body.shz-open { overflow: hidden; }
+.shz { position: fixed; inset: 0; z-index: 120; display: flex; flex-direction: column; color: #fff; overflow: hidden;
+  background: radial-gradient(70% 55% at 50% 45%, #050314 0%, #02020a 55%, #000 100%);
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); animation: shz-in .35s cubic-bezier(.2, .8, .2, 1); }
+@keyframes shz-in { from { opacity: 0; transform: scale(1.04); } to { opacity: 1; transform: none; } }
+.shz-bg { position: absolute; inset: -20%; z-index: -1; pointer-events: none;
+  background: radial-gradient(40% 30% at 50% 46%, #4100f522, transparent 70%), radial-gradient(30% 25% at 20% 85%, #9bf0e10f, transparent 70%), radial-gradient(30% 25% at 85% 15%, #f037a510, transparent 70%);
+  filter: blur(30px); transition: opacity .5s; }
+.shz.listening .shz-bg { animation: shz-breathe 2.4s ease-in-out infinite; }
+@keyframes shz-breathe { 50% { opacity: .55; } }
+.shz-top { display: flex; align-items: center; gap: 12px; padding: 14px 18px 0; }
+.shz-title { flex: 1; min-width: 0; text-align: center; }
+.shz-title b { display: block; font-size: clamp(22px, 4.5vw, 30px); font-weight: 800; letter-spacing: -.02em; text-shadow: 0 0 30px #ffffff30; }
+.shz-title small { display: block; font-size: 14px; color: #ffffffa8; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shz-stage { flex: 1; display: grid; place-items: center; position: relative; min-height: 0; }
+.shz-dial { width: min(92vw, 62vh, 560px); height: auto; overflow: visible; filter: drop-shadow(0 0 40px #4100f533); transition: transform .5s cubic-bezier(.2, .8, .2, 1), opacity .4s; }
+.shz-disc { cursor: pointer; transform-origin: 200px 200px; transition: transform .12s; filter: drop-shadow(0 10px 30px #ffffff26); }
+.shz-disc:active { transform: scale(.96) !important; }
+.shz.found .shz-dial { transform: translateY(-18%) scale(.62); opacity: .85; }
+.shz-result { position: absolute; left: 0; right: 0; bottom: 4%; display: flex; justify-content: center; padding: 0 16px; animation: shz-up .45s cubic-bezier(.2, .8, .2, 1); }
+@keyframes shz-up { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: none; } }
+.shz-card { width: min(560px, 100%); border-radius: 28px; padding: 16px; display: grid; grid-template-columns: 96px 1fr; gap: 6px 16px; align-items: center; }
+.shz-card img { width: 96px; height: 96px; border-radius: 16px; object-fit: cover; grid-row: span 2; box-shadow: 0 10px 30px #000a; }
+.shz-info { min-width: 0; }
+.shz-info b { display: block; font-size: 22px; font-weight: 900; letter-spacing: -.01em; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shz-info .ar-link { font-size: 16px; }
+.shz-info small { display: block; color: #ffffff99; font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shz-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.shz-acts .i { width: 16px; height: 16px; vertical-align: -3px; }
+.shz-have { font-size: 13px; color: var(--aqua); display: inline-flex; align-items: center; gap: 4px; }
+.shz-dock { margin: 0 14px 14px; border-radius: 26px; padding: 12px 14px; }
+.shz-dock small { display: block; font-size: 12px; font-weight: 700; color: #ffffff99; letter-spacing: .04em; text-transform: uppercase; margin: 0 2px 8px; }
+.shz-hrow { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; }
+.shz-h { flex: none; width: 116px; text-align: left; color: #fff; }
+.shz-h img { width: 116px; height: 116px; border-radius: 14px; object-fit: cover; display: block; margin-bottom: 6px; box-shadow: 0 6px 18px #0008; }
+.shz-h b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shz-h span { display: block; font-size: 12px; color: #ff3cc7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .shz-card { grid-template-columns: 76px 1fr; border-radius: 24px; }
+  .shz-card img { width: 76px; height: 76px; }
+  .shz-acts { grid-column: 1 / -1; }
+  .shz-h { width: 92px; } .shz-h img { width: 92px; height: 92px; }
+  .top-actions .listen-btn span { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .shz, .shz-result { animation: none; } }
