@@ -937,6 +937,29 @@ async function heroColor(src) {
   if (c) { view.style.setProperty('--hero', c); $('#topbar').style.setProperty('--topbar-bg', `color-mix(in srgb, ${c} 45%, #121212)`); }
 }
 
+// ------------------------------------------------------------------ widgets do início (estilo cartões de vidro)
+async function loadWidgets() {
+  let d; try { d = await api('/stats/summary'); } catch { return; }
+  const box = $('#home-widgets'); if (!box || route.name !== 'home') return;
+  const max = Math.max(1, ...d.spark);
+  const today = d.spark.length - 1;
+  const w = [];
+  w.push(`<a class="widget w-today" href="#/songs"><small>Ouviste hoje</small>
+    <div class="big">${d.today}<em>${d.today === 1 ? 'música' : 'músicas'}</em></div>
+    <div class="ring">${Math.round(d.minutes_week / 7)}<small style="position:absolute;bottom:14px;font-size:10px">min/dia</small></div></a>`);
+  w.push(`<div class="widget w-week"><small>Esta semana</small>
+    <div class="spark">${d.spark.map((n, i) => `<i class="${i === today ? 'hi' : ''}" style="height:${Math.max(12, (n / max) * 100)}%"></i>`).join('')}</div>
+    <div class="big">${d.minutes_week}<em>min</em></div></div>`);
+  if (d.top_genre) w.push(`<a class="widget w-genre" href="#/genre/${encodeURIComponent(d.top_genre.g)}"><small>Género do mês</small>
+    <div class="dots">${'<i></i>'.repeat(9)}</div><div class="big" style="font-size:28px;font-weight:700">${esc(d.top_genre.g)}</div></a>`);
+  if (d.top_artist) w.push(`<a class="widget w-artist" href="#/artist/${d.top_artist.id}"><span class="w-photo" style="background-image:url('${d.top_artist.cover_album ? coverUrl(d.top_artist.cover_album) : ''}')"></span><small>Artista do mês</small>
+    <div class="big" style="font-size:26px;font-weight:800">${esc(d.top_artist.name)}</div><small>${plural(d.top_artist.n, 'reprodução', 'reproduções')}</small></a>`);
+  w.push(`<a class="widget w-lib" href="#/songs"><small>Biblioteca</small><span class="scale"></span><span class="tick"></span>
+    <div class="big">${d.library}<em>músicas · ${d.library_hours} h</em></div></a>`);
+  box.innerHTML = w.join('');
+  if (d.top_artist) api(`/artists/${d.top_artist.id}/info`).then((inf) => { const ph = box.querySelector('.w-artist .w-photo'); if (inf.photo && ph) ph.style.backgroundImage = `url('${inf.photo}')`; }).catch(() => {});
+}
+
 // ------------------------------------------------------------------ novos lançamentos dos teus artistas
 const NR = { items: [], waiting: new Set() };
 const TOP = { data: null, refresh: false };
@@ -1045,6 +1068,7 @@ const VIEWS = {
     let html = `<div class="view-inner"><h1 class="greeting">${greeting()}</h1>
       <p class="stats">${plural(d.stats.tracks, 'música', 'músicas')} · ${plural(d.stats.albums, 'álbum', 'álbuns')} · ${plural(d.stats.artists, 'artista', 'artistas')} · ${fmtLong(d.stats.duration)}</p>
       <div id="rel-banner"></div>
+      <div id="home-widgets" class="widgets"></div>
       <div class="shortcuts">${sc.join('')}</div>`;
     if (d.recently_played.length) {
       const k = registerList(d.recently_played, { key: 'recent', label: 'Tocadas recentemente' });
@@ -1058,7 +1082,7 @@ const VIEWS = {
     html += section('Os teus artistas', `<div class="grid row">${d.artists.map(artistCard).join('')}</div>`, '#/artists');
     if (d.playlists.length) html += section('As tuas playlists', `<div class="grid row">${d.playlists.map(playlistCard).join('')}</div>`, '#/library');
     view.innerHTML = html + '</div>';
-    loadReleases();
+    loadReleases(); loadWidgets();
     const firstCover = d.recent_albums.find((a) => a.has_cover);
     if (firstCover) {
       const c = await dominantColor(coverUrl(firstCover.id));
@@ -1175,34 +1199,47 @@ const VIEWS = {
   async artist(id) {
     const a = await api(`/artists/${id}`);
     const ctx = { key: `artist:${id}`, label: a.name, href: `#/artist/${id}` };
+    const g0 = a.genres?.[0];
     view.innerHTML = `
-      <div class="hero">${artistArt(a, 'hero-cover')}<div style="min-width:0">
-        <div class="kind">Artista</div><h1 class="${a.name.length > 24 ? 'long' : ''}">${esc(a.name)}</h1>
-        <div class="sub">${plural(a.track_count, 'música', 'músicas')} na biblioteca</div>
-        ${a.genres?.length ? `<div class="genre-chips">${a.genres.map((g) => `<a href="#/genre/${encodeURIComponent(g)}" style="--gc:${genreColor(g)}">${esc(g)}</a>`).join('')}</div>` : ''}</div></div>
+      <div class="hero artist-hero" id="artist-hero">
+        <div class="ah-photo">${artistArt(a, 'hero-cover')}</div>
+        <div style="min-width:0">
+          <div class="kind">Artista${g0 ? ` · <a class="genre-mark" href="#/genre/${encodeURIComponent(g0)}" style="--gc:${genreColor(g0)}">${esc(g0)}</a>` : ''}</div>
+          <h1 class="${a.name.length > 24 ? 'long' : ''}">${esc(a.name)}</h1>
+          <div class="sub">${plural(a.track_count, 'música', 'músicas')} na biblioteca${a.plays ? `<span class="dot">${plural(a.plays, 'reprodução', 'reproduções')}</span>` : ''}<span class="dot" id="ah-fans"></span></div>
+          ${a.genres?.length > 1 ? `<div class="genre-chips">${a.genres.slice(1).map((g) => `<a href="#/genre/${encodeURIComponent(g)}" style="--gc:${genreColor(g)}">${esc(g)}</a>`).join('')}</div>` : ''}
+        </div></div>
       <div class="action-bar">
-        <button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}">${icon('play')}</button>
-        <span class="artist-mode" title="Ao tocar um artista, o nPlay toca todas as músicas dele em ordem aleatória e repete em loop">${icon('shuffle')}${icon('repeat')}<span>Tudo, aleatório e em loop</span></span>
-        ${a.top_tracks.length ? `<button class="ghost-btn with-ic" data-action="artist-radio" data-name="${esc(a.name)}">${icon('radio')}Rádio</button>${addBtn}` : ''}
-        <button class="ghost-btn" data-action="download-more" data-q="${esc(a.name)}">Descarregar mais</button>
+        <button class="play-big" data-action="play-ctx" data-play-ctx="${ctx.key}" title="Tocar">${icon('play')}</button>
+        ${a.track_count ? `<button class="glass-pill" data-action="artist-radio" data-id="${id}" data-name="${esc(a.name)}" title="Todas as músicas de ${esc(a.name)} em ordem aleatória, misturando os álbuns">${icon('radio')}<span>Rádio de ${esc(a.name)}</span></button>` : ''}
+        ${a.top_tracks.length ? addBtn : ''}
+        <button class="glass-pill" data-action="download-more" data-q="${esc(a.name)}">${icon('download')}<span>Descarregar mais</span></button>
       </div>
       <div class="content">
+        <div id="artist-bio"></div>
+        ${a.top_tracks.length ? section(a.plays ? 'Mais tocadas' : 'Músicas', trackTable(a.top_tracks, ctx, { head: false })
+          + (a.track_count > a.top_tracks.length ? `<button class="glass-pill more-btn" data-action="artist-all" data-id="${id}">Ver todas as ${a.track_count} músicas</button><div id="artist-all"></div>` : '')) : ''}
         ${a.latest ? `<section class="section latest-wrap">
           <a class="latest" href="#/album/${a.latest.id}">${art(a.latest.id, a.latest.has_cover)}
             <div><small>${isNew(a.latest.release_date) ? '<span class="new-tag">Novo</span>' : ''}Último lançamento</small><b>${esc(a.latest.title)}</b>
             <span>${esc(fmtRelease(a.latest.release_date || a.latest.year))} · ${plural(a.latest.track_count, 'música', 'músicas')}</span></div></a>
-          <div class="latest-list"><h2>Mais recentes</h2>${trackTable(a.recent_tracks.slice(0, 5), ctx, { head: false, album: false })}</div></section>` : ''}
-        ${a.top_tracks.length ? section('Populares', trackTable(a.top_tracks, ctx, { head: false })) : ''}
+          <div class="latest-list"><h2>Mais recentes</h2>${trackTable(a.recent_tracks.slice(0, 4), ctx, { head: false, album: false })}</div></section>` : ''}
         <div id="artist-releases"></div>
-        <div id="artist-all"></div>
-        ${a.albums.length ? section('Discografia (do mais recente)', `<div class="grid">${a.albums.map(albumCard).join('')}</div>`) : ''}
+        ${a.albums.length ? section('Discografia', `<div class="grid">${a.albums.map(albumCard).join('')}</div>`) : ''}
         ${a.appears_on.length ? section('Aparece em', `<div class="grid row">${a.appears_on.map(albumCard).join('')}</div>`) : ''}
       </div>`;
     heroColor(a.cover_album ? coverUrl(a.cover_album) : null);
     loadArtistReleases(id);
-    api(`/artists/${id}/tracks`).then((all) => {
-      const box = $('#artist-all'); if (!box || route.name !== 'artist' || route.arg !== String(id) || !all.length) return;
-      box.innerHTML = section(`Todas as músicas · ${all.length}`, trackTable(all, ctx));
+    // foto do artista e resumo da história
+    api(`/artists/${id}/info`).then((inf) => {
+      if (route.name !== 'artist' || route.arg !== String(id)) return;
+      if (inf.photo) {
+        $('#artist-hero .ah-photo').innerHTML = `<img class="hero-cover round" src="${esc(inf.photo)}" alt="">`;
+        $('#artist-hero').style.setProperty('--ah-bg', `url("${inf.photo}")`); $('#artist-hero').classList.add('has-photo');
+      }
+      if (inf.fans) $('#ah-fans').textContent = `${inf.fans.toLocaleString('pt-PT')} fãs no Deezer`;
+      if (inf.bio) $('#artist-bio').innerHTML = `<section class="bio-card glass-card"><div class="bio-head"><b>Sobre ${esc(a.name)}</b>${g0 ? `<a class="genre-mark" href="#/genre/${encodeURIComponent(g0)}" style="--gc:${genreColor(g0)}">${esc(g0)}</a>` : ''}</div>
+        <p>${esc(inf.bio)}</p>${inf.bio_url ? `<a class="bio-src" href="${esc(inf.bio_url)}" target="_blank" rel="noopener">Ler mais na Wikipédia ↗</a>` : ''}</section>`;
     }).catch(() => {});
   },
 
@@ -1831,7 +1868,19 @@ document.addEventListener('click', async (e) => {
       }
       case 'add-current': { const t = uiTrack(); if (t) pickPlaylist([t]); break; }
       case 'add-ctx': { const k = $('#view .tracks[data-list]')?.dataset.list; if (k && lists[k]) pickPlaylist(lists[k].tracks); break; }
-      case 'artist-radio': { const k = $('#view .tracks[data-list]')?.dataset.list; if (k && lists[k]) startRadio(lists[k].tracks.slice(0, 3), `Rádio: ${a.dataset.name}`); break; }
+      case 'artist-radio': {   // rádio do artista: todas as músicas dele, aleatórias, misturando os álbuns, em loop
+        const all = await api(`/artists/${a.dataset.id}/tracks`);
+        playList(all, 0, { key: `artist:${a.dataset.id}`, label: `Rádio de ${a.dataset.name}`, href: `#/artist/${a.dataset.id}`, full: true }, true);
+        toast(`Rádio de ${a.dataset.name}: ${all.length} músicas, aleatórias e em loop`); break;
+      }
+      case 'artist-all': {
+        const box = $('#artist-all'); if (!box) break;
+        if (box.innerHTML) { box.innerHTML = ''; a.textContent = a.dataset.label; break; }
+        const all = await api(`/artists/${a.dataset.id}/tracks`);
+        a.dataset.label = a.textContent; a.textContent = 'Mostrar menos';
+        box.innerHTML = trackTable(all, { key: `artist:${a.dataset.id}`, label: '', href: `#/artist/${a.dataset.id}`, full: true }, { head: false });
+        break;
+      }
       case 'save-queue': {
         const ts = P.queue.slice(Math.max(0, P.idx)); if (!ts.length) { toast('A fila está vazia'); break; }
         closeModal(); createPlaylistWith(ts, `Fila de ${new Date().toLocaleDateString('pt-PT', { day: 'numeric', month: 'short' })}`); break;

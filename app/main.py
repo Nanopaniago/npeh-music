@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import artistinfo, catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -83,6 +83,7 @@ async def lifespan(app):
     migrated = init_db()
     releases.init()
     recognize.init()
+    artistinfo.init()
     downloader.AFTER_JOB.append(_after_job)
     canvasgen.start()
     tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop()),
@@ -246,7 +247,9 @@ def get_artist(artist_id: int):
     name_like = f"%{a['name']}%"
     a["top_tracks"] = tracks_q(
         "t.artist_id=? OR al.artist_id=? OR t.artist LIKE ?", (artist_id, artist_id, name_like),
-        "(SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id) DESC, t.added_at DESC", limit=10)
+        "(SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id) DESC, t.added_at DESC", limit=6)
+    a["plays"] = row("""SELECT COUNT(*) c FROM plays p JOIN tracks t ON t.id=p.track_id
+                        WHERE t.artist_id=? OR t.artist LIKE ?""", (artist_id, name_like))["c"]
     a["albums"] = albums_q("al.artist_id=?", (artist_id,), f"{REL_AL}, al.title")
     # lançamentos mais recentes primeiro: o último lançamento em destaque e as músicas mais novas
     a["latest"] = a["albums"][0] if a["albums"] else None
@@ -260,6 +263,35 @@ def get_artist(artist_id: int):
     a["track_count"] = row("SELECT COUNT(*) c FROM tracks t LEFT JOIN albums al ON al.id=t.album_id "
                            "WHERE t.artist_id=? OR al.artist_id=?", (artist_id, artist_id))["c"]
     return a
+
+
+@app.get("/api/stats/summary")
+def stats_summary():
+    """Números para os widgets do início."""
+    now = int(time.time())
+    day0 = now - (now % 86400)
+    today = row("SELECT COUNT(*) c FROM plays WHERE played_at>=?", (day0,))["c"]
+    week = rows("SELECT date(played_at,'unixepoch') d, COUNT(*) n, SUM(COALESCE(t.duration,180)) s FROM plays p "
+                "JOIN tracks t ON t.id=p.track_id WHERE played_at>=? GROUP BY d ORDER BY d", (now - 7 * 86400,))
+    minutes = int(sum(r["s"] or 0 for r in week) / 60)
+    g = row("""SELECT COALESCE(t.genre_group,'Outros') g, COUNT(*) n FROM plays p JOIN tracks t ON t.id=p.track_id
+               WHERE played_at>=? GROUP BY g ORDER BY n DESC LIMIT 1""", (now - 30 * 86400,))
+    ar = row(f"""SELECT a.id, a.name, {artist_cover_sql()} AS cover_album, COUNT(*) n FROM plays p JOIN tracks t ON t.id=p.track_id
+                 JOIN artists a ON a.id=t.artist_id WHERE played_at>=? GROUP BY a.id ORDER BY n DESC LIMIT 1""", (now - 30 * 86400,))
+    lib = row("SELECT COUNT(*) c, COALESCE(SUM(duration),0) d FROM tracks")
+    days = {r["d"]: r["n"] for r in week}
+    spark = [days.get(time.strftime("%Y-%m-%d", time.gmtime(now - i * 86400)), 0) for i in range(6, -1, -1)]
+    return {"today": today, "minutes_week": minutes, "top_genre": g, "top_artist": ar,
+            "library": lib["c"], "library_hours": int((lib["d"] or 0) / 3600), "spark": spark}
+
+
+@app.get("/api/artists/{artist_id}/info")
+async def artist_info(artist_id: int):
+    """Resumo da história (Wikipédia) e foto (Deezer)."""
+    a = row("SELECT name FROM artists WHERE id=?", (artist_id,))
+    if not a:
+        raise HTTPException(404)
+    return await asyncio.to_thread(artistinfo.get, artist_id, a["name"])
 
 
 @app.get("/api/artists/{artist_id}/tracks")
