@@ -16,7 +16,7 @@ STRUCTURES = {
 FORMATS = ("original", "m4a", "mp3", "ogg", "flac", "wav")
 BITRATES = ("disable", "auto", "128k", "192k", "256k", "320k")
 SCAN_OPTIONS = (0, 15, 60, 360, 1440)
-SYNC_OPTIONS = (1, 3, 6, 12, 24)
+SYNC_OPTIONS = (1, 3, 6, 12, 24, 48, 168)
 LOSSLESS = {"flac", "wav"}
 
 
@@ -50,6 +50,7 @@ DEFAULTS = {
     "rel_notify": True,
     "rel_auto": False,
     "car_resume": True,
+    "pl_sync_paused": False,
 }
 
 class SettingError(ValueError):
@@ -96,7 +97,7 @@ def _validate(key, v):
         if i not in SYNC_OPTIONS:
             raise SettingError("Intervalo de sincronização inválido.")
         return i
-    if key in ("dl_lyrics", "canvas_auto", "autoplay", "rel_notify", "rel_auto", "car_resume"):
+    if key in ("dl_lyrics", "canvas_auto", "autoplay", "rel_notify", "rel_auto", "car_resume", "pl_sync_paused"):
         if isinstance(v, bool):
             return v
         raise SettingError("Valor inválido.")

@@ -518,6 +518,34 @@ def sync_playlist(pid: int):
     return {"ok": True}
 
 
+@app.get("/api/sources")
+def list_sources():
+    return sources.dashboard()
+
+
+@app.patch("/api/sources/{sid}")
+def patch_source(sid: int, data: dict = Body(...)):
+    try:
+        sources.update(sid, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/sources/{sid}/sync")
+def sync_source(sid: int):
+    sources.start_sync(sid)
+    return {"ok": True}
+
+
+@app.post("/api/sources/sync-all")
+def sync_all_sources():
+    ids = [r["id"] for r in rows("SELECT id FROM pl_sources WHERE enabled=1")]
+    for i in ids:
+        sources.start_sync(i)
+    return {"ok": True, "count": len(ids)}
+
+
 @app.patch("/api/playlists/{pid}/source")
 def toggle_source(pid: int, enabled: bool = Body(..., embed=True)):
     c = get_conn()

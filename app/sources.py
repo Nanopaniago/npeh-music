@@ -88,14 +88,16 @@ def _spotify_embed(url):
     return ent.get("name") or ent.get("title"), items
 
 
-def _fetch_spotify(url):
-    """Primeiro a leitura rápida (embed); se a playlist tiver mais de 100 músicas, completa com o spotDL."""
+def _fetch_spotify(url, mode="auto"):
+    """auto: leitura rápida (embed) e, se a playlist tiver 100+ músicas, completa com o spotDL.
+    embed: só a leitura rápida (até 100). full: sempre a lista completa pelo spotDL (mais lento)."""
     name, items = None, []
-    try:
-        name, items = _spotify_embed(url)
-    except Exception as e:  # noqa
-        log.info("embed do Spotify falhou (%s); a usar o spotDL", e)
-    if len(items) >= 100 or not items:
+    if mode != "full":
+        try:
+            name, items = _spotify_embed(url)
+        except Exception as e:  # noqa
+            log.info("embed do Spotify falhou (%s); a usar o spotDL", e)
+    if mode != "embed" and (mode == "full" or len(items) >= 100 or not items):
         try:
             n2, full = _spotify_save(url)
             if len(full) > len(items):
@@ -136,8 +138,8 @@ def _fetch_deezer(url):
     return meta.get("title"), meta.get("picture_big") or meta.get("picture_medium"), items
 
 
-def fetch(kind, url):
-    return _fetch_spotify(url) if kind == "spotify" else _fetch_deezer(url)
+def fetch(kind, url, mode="auto"):
+    return _fetch_spotify(url, mode or "auto") if kind == "spotify" else _fetch_deezer(url)
 
 
 # ---------------------------------------------------------------- ligação às faixas da biblioteca
@@ -212,13 +214,15 @@ def sync(source_id):
                 return
             conn = get_conn()
             try:
-                name, cover, items = fetch(s["kind"], s["url"])
+                name, cover, items = fetch(s["kind"], s["url"], s.get("spotify_mode"))
             except Exception as e:  # noqa
                 log.warning("sync %s falhou: %s", s["url"], e)
                 conn.execute("UPDATE pl_sources SET last_status='error', last_error=?, last_sync=? WHERE id=?",
                              (str(e)[:300], int(time.time()), source_id))
                 conn.commit()
                 return
+            before = {r[0] for r in conn.execute("SELECT key FROM pl_source_items WHERE source_id=?", (source_id,))}
+            added = len({dedupe.key_for(it["artist"], it["title"]) for it in items} - before) if before else 0
             conn.execute("DELETE FROM pl_source_items WHERE source_id=?", (source_id,))
             conn.executemany(
                 "INSERT INTO pl_source_items(source_id, position, key, title, artist, duration, query) VALUES (?,?,?,?,?,?,?)",
@@ -227,10 +231,12 @@ def sync(source_id):
             if name:
                 conn.execute("UPDATE playlists SET name=? WHERE id=?", (name[:120], s["playlist_id"]))
             conn.execute("UPDATE pl_sources SET name=COALESCE(?, name), cover=COALESCE(?, cover), total=?, last_sync=?, "
-                         "last_status='ok', last_error=NULL WHERE id=?",
-                         (name, cover, len(items), int(time.time()), source_id))
+                         "last_status='ok', last_error=NULL, last_added=? WHERE id=?",
+                         (name, cover, len(items), int(time.time()), added, source_id))
             conn.commit()
             relink(source_id)
+            if s.get("auto_download") == 0:
+                return
             # descarrega só o que falta (o downloader ignora o que já existe ou já está na fila)
             todo = [{"artist": it["artist"], "title": it["title"], "duration": it["duration"],
                      "query": it["query"] if RE_SPOTIFY_TRACK.match(it["query"] or "") else None} for it in items]
@@ -240,10 +246,62 @@ def sync(source_id):
         syncing.discard(source_id)
 
 
+def interval(src, settings=None):
+    settings = settings or app_settings.get_all()
+    return src.get("interval_hours") or settings["pl_sync_hours"]
+
+
 def due_sources():
-    hours = app_settings.get_all()["pl_sync_hours"]
-    return [r["id"] for r in rows("SELECT id FROM pl_sources WHERE enabled=1 AND (last_sync IS NULL OR last_sync < ?)",
-                                 (int(time.time()) - hours * 3600,))]
+    st = app_settings.get_all()
+    if st.get("pl_sync_paused"):
+        return []
+    now = int(time.time())
+    return [r["id"] for r in rows("SELECT * FROM pl_sources WHERE enabled=1")
+            if not r["last_sync"] or r["last_sync"] < now - interval(r, st) * 3600]
+
+
+def dashboard():
+    """Tudo o que o painel "Playlists monitorizadas" mostra."""
+    st = app_settings.get_all()
+    out = []
+    for s in rows("""SELECT s.*, p.name AS pl_name,
+                     (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id=s.playlist_id) AS in_playlist,
+                     (SELECT t.album_id FROM playlist_tracks pt JOIN tracks t ON t.id=pt.track_id
+                      WHERE pt.playlist_id=s.playlist_id ORDER BY pt.position LIMIT 1) AS cover_album
+                     FROM pl_sources s JOIN playlists p ON p.id=s.playlist_id ORDER BY p.name COLLATE NOCASE"""):
+        h = interval(s, st)
+        s["interval"] = h
+        s["custom_interval"] = bool(s["interval_hours"])
+        s["next_sync"] = (s["last_sync"] or 0) + h * 3600 if s["last_sync"] else None
+        s["syncing"] = s["id"] in syncing
+        s["enabled"] = bool(s["enabled"])
+        s["auto_download"] = s["auto_download"] != 0
+        s["pending"] = row("SELECT COUNT(*) c FROM dl_items d JOIN pl_source_items i ON i.key=d.key "
+                           "WHERE i.source_id=? AND d.status IN ('queued','running')", (s["id"],))["c"]
+        out.append(s)
+    return {"paused": bool(st.get("pl_sync_paused")), "hours": st["pl_sync_hours"],
+            "options": list(app_settings.SYNC_OPTIONS), "sources": out}
+
+
+def update(source_id, data):
+    allowed = {}
+    if "enabled" in data:
+        allowed["enabled"] = int(bool(data["enabled"]))
+    if "auto_download" in data:
+        allowed["auto_download"] = int(bool(data["auto_download"]))
+    if "interval_hours" in data:
+        v = data["interval_hours"]
+        if v not in (None, "", 0) and int(v) not in app_settings.SYNC_OPTIONS:
+            raise ValueError("Intervalo inválido")
+        allowed["interval_hours"] = int(v) if v else None
+    if "spotify_mode" in data:
+        if data["spotify_mode"] not in ("auto", "embed", "full"):
+            raise ValueError("Modo inválido")
+        allowed["spotify_mode"] = data["spotify_mode"]
+    if allowed:
+        conn = get_conn()
+        conn.execute(f"UPDATE pl_sources SET {', '.join(k + '=?' for k in allowed)} WHERE id=?", (*allowed.values(), source_id))
+        conn.commit()
 
 
 def info(playlist_id):

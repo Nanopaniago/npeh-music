@@ -530,7 +530,7 @@ async function shzHistory() {
     <button class="shz-h" data-action="shz-hist" data-i="${i}"><img src="${esc(x.cover || '/static/icons/icon-192.png')}" alt=""><b>${esc(x.title)}</b><span>${esc(x.artist)}</span></button>`).join('')}</div>` : '<small>As músicas que identificares aparecem aqui.</small>';
   SHZ.hist = h;
 }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#shz').hidden) closeShazam(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#shz').hidden) closeShazam(); if (e.key === 'Escape') closeMonPop(); });
 
 // ------------------------------------------------------------------ carro / Bluetooth: retoma ao voltar a ligar
 // Quando o telemóvel liga ao CarPlay (ou a um Bluetooth), o sistema muda a saída de áudio. Se a música tinha sido
@@ -921,7 +921,7 @@ async function render() {
   $('#search-box').hidden = name !== 'search';
   highlightLib(); closeMenu();
   view.style.removeProperty('--hero'); $('#topbar').style.removeProperty('--topbar-bg');
-  clearInterval(dlTimer); clearTimeout(plTimer); stopPreview(); clearSel();
+  clearInterval(dlTimer); closeMonPop(); clearTimeout(plTimer); stopPreview(); clearSel();
   view.classList.toggle('quiet', quietRender);
   try {
     await VIEWS[name](arg);
@@ -1319,6 +1319,7 @@ const VIEWS = {
     view.innerHTML = `<div class="view-inner">
       <h1 class="page-title">Downloads</h1>
       <div id="dl-warn"></div>
+      <div id="mon"></div>
       <div class="dl-search">
         <div class="search-box dl-sbox">${icon('search')}<input id="dl-q" type="search" placeholder="Pesquisar música, álbum ou artista…" autocomplete="off" value="${esc(dl.q)}"></div>
         <div class="seg" id="dl-type">${[['track', 'Músicas'], ['album', 'Álbuns'], ['artist', 'Artistas'], ['playlist', 'Playlists']].map(([k, l]) => `<button class="${dl.type === k ? 'active' : ''}" data-action="dl-type" data-type="${k}">${l}</button>`).join('')}</div>
@@ -1355,6 +1356,7 @@ const VIEWS = {
       refreshJobs();
     };
     if (dl.q.length >= 2 && (pre || !dl.items.length) && !dl.view) dlSearch(); else renderDl();
+    renderMonitor();
     await refreshJobs();
     dlTimer = setInterval(refreshJobs, 2000);
   },
@@ -1762,7 +1764,101 @@ $('#search-input').addEventListener('input', debounce((e) => {
 // downloads
 let dlTimer = null, knownJobs = {};
 const ST = { queued: 'Na fila', running: 'A descarregar', done: 'Concluído', partial: 'Parcial', failed: 'Falhou', cancelled: 'Cancelado' };
+// ------------------------------------------------------------------ playlists monitorizadas (painel + menu flutuante)
+const MON = { data: null, t: 0 };
+const fmtIn = (sec) => { if (sec <= 60) return 'agora'; const m = Math.round(sec / 60); if (m < 60) return `${m} min`; const h = Math.floor(m / 60), r = m % 60; return h >= 24 ? `${Math.round(h / 24)} d` : `${h} h${r && h < 6 ? ` ${r}` : ''}`; };
+const fmtHours = (h) => (h >= 168 ? '7 dias' : h >= 48 ? `${h / 24} dias` : h === 24 ? '1 dia' : `${h} h`);
+function monDial(src, paused) {
+  // mostrador: 48 traços à volta, acesos até ao tempo que falta para a próxima atualização
+  const now = Date.now() / 1000, total = src.interval * 3600;
+  const left = src.next_sync ? Math.max(0, src.next_sync - now) : 0;
+  const frac = src.syncing ? 1 : src.next_sync ? 1 - left / total : 1;
+  const n = 48, on = Math.round(frac * n);
+  let ticks = '';
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2, r1 = 40, r2 = i % 6 === 0 ? 47 : 45;
+    const lit = i < on;
+    ticks += `<line x1="${50 + r1 * Math.cos(a)}" y1="${50 + r1 * Math.sin(a)}" x2="${50 + r2 * Math.cos(a)}" y2="${50 + r2 * Math.sin(a)}" stroke="${lit ? (i === on - 1 ? '#c8ff2e' : '#fff') : '#ffffff40'}" stroke-width="${i === on - 1 ? 2.4 : 1.6}" stroke-linecap="round"/>`;
+  }
+  const label = src.syncing ? '<tspan class="spin">↻</tspan>' : !src.enabled || paused ? '❚❚' : src.next_sync ? fmtIn(left) : 'agora';
+  return `<svg class="mon-dial ${src.syncing ? 'busy' : ''}" viewBox="0 0 100 100">${ticks}
+    <circle cx="50" cy="50" r="31" fill="url(#monDisc)"/><circle cx="50" cy="50" r="27" fill="none" stroke="#c7ccd6" stroke-width="1"/>
+    <text x="50" y="${src.syncing ? 57 : 54}" text-anchor="middle" class="mon-dial-t">${label}</text></svg>`;
+}
+async function renderMonitor() {
+  const box = $('#mon'); if (!box) return;
+  let d; try { d = await api('/sources'); } catch { return; }
+  MON.data = d; MON.t = Date.now();
+  if (!$('#mon')) return;
+  if (!d.sources.length) { box.innerHTML = ''; return; }
+  const active = d.sources.filter((x) => x.enabled).length;
+  const busy = d.sources.some((x) => x.syncing);
+  box.innerHTML = `<section class="mon glass-card">
+    <svg width="0" height="0" style="position:absolute"><defs><radialGradient id="monDisc" cx="40%" cy="35%" r="75%"><stop offset="0" stop-color="#fff"/><stop offset=".75" stop-color="#e7e9ef"/><stop offset="1" stop-color="#c9ced8"/></radialGradient></defs></svg>
+    <header class="mon-head">
+      <button class="mon-master ${d.paused ? 'paused' : ''}" data-action="mon-pause-all" title="${d.paused ? 'Retomar a atualização automática' : 'Pausar a atualização automática'}">${icon(d.paused ? 'play' : 'pause')}</button>
+      <div class="mon-title"><b>Playlists monitorizadas</b>
+        <small>${d.paused ? '<span class="mon-state off">Pausado</span> · nenhuma playlist é atualizada sozinha' : `<span class="mon-state ${busy ? 'busy' : 'on'}">${busy ? 'A atualizar' : 'Ativo'}</span> · ${active} de ${d.sources.length} · a cada ${fmtHours(d.hours)}`}</small></div>
+      <button class="glass-pill" data-action="mon-sync-all" title="Atualizar todas agora">${icon('refresh')}<span>Atualizar todas</span></button>
+      <button class="glass-btn sm" data-action="mon-menu" data-sid="" title="Parâmetros de atualização">${icon('gear')}</button>
+    </header>
+    <div class="mon-grid">${d.sources.map((x) => `
+      <div class="mon-card ${x.enabled && !d.paused ? '' : 'off'} ${x.last_status === 'error' ? 'err' : ''}" style="--mc:${x.kind === 'spotify' ? '#1ed760' : '#a238ff'}">
+        ${monDial(x, d.paused)}
+        <div class="mon-info">
+          <a class="mon-name" href="#/playlist/${x.playlist_id}">${esc(x.pl_name || x.name || 'Playlist')}</a>
+          <div class="mon-src"><span class="mon-kind">${x.kind === 'spotify' ? 'Spotify' : 'Deezer'}</span>${x.custom_interval ? ` · a cada ${fmtHours(x.interval)}` : ''}${x.auto_download ? '' : ' · só lista'}</div>
+          <div class="mon-stats"><span><b>${x.matched}</b>/${x.total} na biblioteca</span>${x.pending ? `<span class="pend">${x.pending} a descarregar</span>` : ''}${x.last_added ? `<span class="new">+${x.last_added} novas</span>` : ''}</div>
+          <small class="mon-when">${x.syncing ? 'A atualizar agora…' : x.last_status === 'error' ? `Erro: ${esc((x.last_error || '').slice(0, 80))}` : x.last_sync ? `Atualizada ${ago(x.last_sync)}` : 'Ainda não atualizada'}</small>
+        </div>
+        <div class="mon-acts">
+          <button class="glass-btn sm" data-action="mon-toggle" data-sid="${x.id}" data-on="${x.enabled ? 1 : 0}" title="${x.enabled ? 'Pausar esta playlist' : 'Retomar esta playlist'}">${icon(x.enabled ? 'pause' : 'play')}</button>
+          <button class="glass-btn sm" data-action="mon-sync" data-sid="${x.id}" title="Atualizar agora" ${x.syncing ? 'disabled' : ''}>${icon('refresh')}</button>
+          <button class="glass-btn sm" data-action="mon-menu" data-sid="${x.id}" title="Parâmetros">${icon('more')}</button>
+        </div>
+      </div>`).join('')}</div></section>`;
+}
+// menu flutuante (pop-up de vidro) com os parâmetros de atualização
+function closeMonPop() { $('#mon-pop')?.remove(); document.removeEventListener('pointerdown', monPopOutside, true); }
+function monPopOutside(e) { if (!e.target.closest('#mon-pop') && !e.target.closest('[data-action="mon-menu"]')) closeMonPop(); }
+function openMonPop(btn, sid) {
+  closeMonPop();
+  const d = MON.data; if (!d) return;
+  const src = sid ? d.sources.find((x) => x.id === +sid) : null;
+  const chips = (cur, attr) => d.options.map((h) => `<button class="pchip ${cur === h ? 'on' : ''}" data-action="mon-set" ${attr} data-h="${h}">${fmtHours(h)}</button>`).join('');
+  let html;
+  if (!src) {
+    html = `<h4>Atualização automática</h4>
+      <div class="prow"><span>Estado</span><button class="switch ${d.paused ? '' : 'on'}" data-action="mon-pause-all"><i></i></button></div>
+      <label>Verificar todas as playlists a cada</label><div class="pchips">${chips(d.hours, 'data-scope="all"')}</div>
+      <p class="phint">Cada playlist pode ter o seu próprio intervalo (botão ⋯ no cartão).</p>
+      <button class="primary-btn sm" data-action="mon-sync-all">${icon('refresh')} Atualizar todas agora</button>`;
+  } else {
+    html = `<h4>${esc(src.pl_name || src.name)}</h4>
+      <div class="prow"><span>Monitorizar</span><button class="switch ${src.enabled ? 'on' : ''}" data-action="mon-toggle" data-sid="${src.id}" data-on="${src.enabled ? 1 : 0}"><i></i></button></div>
+      <label>Intervalo</label>
+      <div class="pchips"><button class="pchip ${src.custom_interval ? '' : 'on'}" data-action="mon-set" data-sid="${src.id}" data-h="0">Igual ao geral (${fmtHours(d.hours)})</button>${chips(src.custom_interval ? src.interval : -1, `data-sid="${src.id}"`)}</div>
+      ${src.kind === 'spotify' ? `<label>Fonte da lista</label><div class="pseg">${[['embed', 'Rápida', 'Página pública, até 100'], ['auto', 'Automática', 'Rápida e completa se passar de 100'], ['full', 'Completa', 'spotDL, mais lenta']].map(([k, l, t]) => `<button class="${(src.spotify_mode || 'auto') === k ? 'on' : ''}" data-action="mon-mode" data-sid="${src.id}" data-mode="${k}" title="${t}">${l}</button>`).join('')}</div>` : '<label>Fonte da lista</label><p class="phint">Deezer: API pública (lista completa).</p>'}
+      <div class="prow"><span>Descarregar músicas novas</span><button class="switch ${src.auto_download ? 'on' : ''}" data-action="mon-dl" data-sid="${src.id}" data-on="${src.auto_download ? 1 : 0}"><i></i></button></div>
+      <div class="plinks"><a href="#/playlist/${src.playlist_id}">Abrir playlist</a><a href="${esc(src.url)}" target="_blank" rel="noopener">Abrir no ${src.kind === 'spotify' ? 'Spotify' : 'Deezer'} ↗</a>
+      <button data-action="mon-unlink" data-pid="${src.playlist_id}">Deixar de monitorizar</button></div>`;
+  }
+  const pop = document.createElement('div');
+  pop.id = 'mon-pop'; pop.className = 'mon-pop glass'; pop.innerHTML = html;
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect(), W = Math.min(340, innerWidth - 24);
+  pop.style.width = W + 'px';
+  const left = Math.min(Math.max(12, r.right - W), innerWidth - W - 12);
+  const below = r.bottom + 10 + pop.offsetHeight < innerHeight - 12;
+  pop.style.left = left + 'px'; pop.style.top = (below ? r.bottom + 10 : Math.max(12, r.top - pop.offsetHeight - 10)) + 'px';
+  pop.style.transformOrigin = `${r.left + r.width / 2 - left}px ${below ? 0 : '100%'}`;
+  setTimeout(() => document.addEventListener('pointerdown', monPopOutside, true), 0);
+  pop.dataset.sid = sid || '';
+}
+async function monAfter(sid) { await renderMonitor(); const b = $(`[data-action="mon-menu"][data-sid="${sid || ''}"]`); if ($('#mon-pop') && b) openMonPop(b, sid); }
+
 async function refreshJobs() {
+  if (Date.now() - MON.t > 15000) renderMonitor();
   let d;
   try { d = await api('/downloads'); } catch { return; }
   checkJobChanges(d.jobs);
@@ -1972,6 +2068,19 @@ document.addEventListener('click', async (e) => {
         shzShow({ found: true, title: x.title, artist: x.artist, cover: x.cover, track: t, library_id: null });
         break;
       }
+      case 'mon-pause-all': { const p = !MON.data?.paused; await api('/settings', { method: 'PUT', json: { pl_sync_paused: p } }); S.pl_sync_paused = p; toast(p ? 'Atualização automática pausada' : 'Atualização automática retomada'); monAfter($('#mon-pop')?.dataset.sid); break; }
+      case 'mon-sync-all': { const r = await api('/sources/sync-all', { json: {} }); toast(`A atualizar ${plural(r.count, 'playlist', 'playlists')}`); closeMonPop(); setTimeout(renderMonitor, 800); break; }
+      case 'mon-sync': await api(`/sources/${a.dataset.sid}/sync`, { json: {} }); toast('A atualizar a playlist…'); setTimeout(renderMonitor, 600); break;
+      case 'mon-toggle': await api(`/sources/${a.dataset.sid}`, { method: 'PATCH', json: { enabled: a.dataset.on !== '1' } }); monAfter($('#mon-pop')?.dataset.sid); break;
+      case 'mon-dl': await api(`/sources/${a.dataset.sid}`, { method: 'PATCH', json: { auto_download: a.dataset.on !== '1' } }); monAfter(a.dataset.sid); break;
+      case 'mon-mode': await api(`/sources/${a.dataset.sid}`, { method: 'PATCH', json: { spotify_mode: a.dataset.mode } }); monAfter(a.dataset.sid); break;
+      case 'mon-set':
+        if (a.dataset.scope === 'all') await api('/settings', { method: 'PUT', json: { pl_sync_hours: +a.dataset.h } });
+        else await api(`/sources/${a.dataset.sid}`, { method: 'PATCH', json: { interval_hours: +a.dataset.h || null } });
+        monAfter(a.dataset.sid || ''); break;
+      case 'mon-menu': e.stopPropagation(); if ($('#mon-pop') && $('#mon-pop').dataset.sid === (a.dataset.sid || '')) closeMonPop(); else openMonPop(a, a.dataset.sid); break;
+      case 'mon-unlink': if (!(await confirmModal('Deixar de monitorizar?', 'A playlist fica na biblioteca como uma playlist normal, mas deixa de receber as músicas novas da original.'))) break;
+        await api(`/playlists/${a.dataset.pid}/source`, { method: 'DELETE' }); closeMonPop(); renderMonitor(); break;
       case 'top-play': case 'top-one': {
         const libT = TOP.data.tracks.filter((t) => t.in_library);
         const ids = libT.map((t) => t.library_id);

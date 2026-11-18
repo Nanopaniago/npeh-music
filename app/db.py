@@ -163,6 +163,11 @@ def init_db():
         if col not in tcols:      # organização por género e data de lançamento
             conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {decl}")
             migrated.add(col)
+    scols = {r[1] for r in conn.execute("PRAGMA table_info(pl_sources)")}
+    for col, decl in (("interval_hours", "INTEGER"), ("auto_download", "INTEGER DEFAULT 1"),
+                      ("spotify_mode", "TEXT DEFAULT 'auto'"), ("last_added", "INTEGER DEFAULT 0")):
+        if col not in scols:      # parâmetros de atualização por playlist monitorizada
+            conn.execute(f"ALTER TABLE pl_sources ADD COLUMN {col} {decl}")
     if "manual" not in {r[1] for r in conn.execute("PRAGMA table_info(playlist_tracks)")}:
         # músicas que tu adicionaste a uma playlist sincronizada (a sincronização não as apaga)
         conn.execute("ALTER TABLE playlist_tracks ADD COLUMN manual INTEGER DEFAULT 0")
