@@ -801,6 +801,9 @@ async function handleMenu(action, btn) {
   closeMenu(); if ($('#modal').dataset.sheet) closeModal();
   if (action === 'dev-select') selectDevice(btn.dataset.did);
   if (action === 'dev-rename') renameDevice();
+  if (action === 'go-account' || action === 'go-users') location.hash = '#/settings';
+  if (action === 'go-users') setTimeout(() => userForm({}), 500);
+  if (action === 'logout') logout();
   if (action === 'dev-kick') kickDevice(btn.dataset.did);
   if (action === 'dev-release' && R.target) { R.target = null; remoteChanged(); toast('Deixaste de controlar o outro dispositivo'); }
   if (action === 'offline') { if (tracks.every((t) => isOff(t.id))) removeOffline(tracks.map((t) => t.id)); else saveOffline(tracks); }
@@ -847,6 +850,7 @@ function promptModal(title, value = '', placeholder = '') {
     $('[data-x]', f).onclick = () => { closeModal(); res(null); };
   });
 }
+function openModalHtml(html) { const m = $('#modal'); m.innerHTML = `<div class="modal-card glass-modal">${html}</div>`; m.hidden = false; }
 function confirmModal(title, text) {
   return new Promise((res) => {
     const m = $('#modal');
@@ -1401,8 +1405,26 @@ const VIEWS = {
     const tpl = v.dl_structure === 'custom' ? v.dl_template : o.structures[v.dl_structure];
     const example = tpl.replace('{album-artist}', 'Maré Alta').replace('{artist}', 'Maré Alta').replace('{album}', 'Atlântico')
       .replace('{track-number}', '01').replace('{title}', 'Ondas').replace('{output-ext}', v.dl_format === 'original' ? 'opus' : v.dl_format);
-    view.innerHTML = `<div class="view-inner"><div class="set-wrap">
+    const usersList = ME?.is_admin ? await api('/users').catch(() => []) : [];
+    view.innerHTML = `<div class="view-inner"><div class="set-wrap ${ME && !ME.is_admin ? 'not-admin' : ''}">
       <h1 class="page-title">Configurações</h1>
+      ${ME ? `<section class="set-card account-card"><h2>A tua conta</h2>
+        <div class="acc-head"><span class="avatar lg" style="--uc:${ME.color || '#c8ff2e'}">${esc((ME.name || ME.username)[0].toUpperCase())}</span>
+          <div><b>${esc(ME.name)}</b><small>@${esc(ME.username)}${ME.is_admin ? ' · <span class="badge-adm">Administrador</span>' : ''}</small></div>
+          <button class="glass-pill" data-action="logout">Terminar sessão</button></div>
+        ${row('Nome', '', `<input class="inp" id="acc-name" value="${esc(ME.name)}" maxlength="40"><button class="ghost-btn" data-action="acc-save-name">Guardar</button>`)}
+        ${row('Palavra-passe', 'Pelo menos 6 caracteres. Ao mudar, as sessões abertas noutros dispositivos terminam.', `<button class="ghost-btn" data-action="acc-pass">Mudar palavra-passe</button>`)}
+      </section>` : ''}
+      ${ME?.is_admin ? `<section class="set-card users-card"><h2>Utilizadores</h2>
+        <p class="set-note">Cada pessoa tem os seus gostos, playlists, histórico, estatísticas e dispositivos. A biblioteca de música e os downloads são partilhados.</p>
+        <div class="user-list">${usersList.map((u) => `<div class="user-row">
+          <span class="avatar" style="--uc:${u.color || '#c8ff2e'}">${esc((u.name || u.username)[0].toUpperCase())}</span>
+          <div class="u-info"><b>${esc(u.name)}${u.id === ME.id ? ' <em>(tu)</em>' : ''}</b><small>@${esc(u.username)}${u.is_admin ? ' · Administrador' : ''} · ${plural(u.playlists, 'playlist', 'playlists')} · ${plural(u.likes, 'gosto', 'gostos')}${u.last_login ? ` · entrou ${ago(u.last_login)}` : ' · nunca entrou'}</small></div>
+          ${u.id !== ME.id ? `<button class="glass-btn sm" data-action="user-edit" data-uid="${u.id}" title="Editar">${icon('more')}</button>` : ''}
+        </div>`).join('')}</div>
+        <button class="primary-btn sm" data-action="user-new">${icon('plus')} Criar utilizador</button>
+      </section>` : ''}
+      ${ME && !ME.is_admin ? '<p class="set-note ro-note">As definições abaixo são do servidor e só o administrador as pode mudar.</p>' : ''}
 
       <section class="set-card"><h2>Reprodução</h2>
         ${row('Crossfade', volumeSupported
@@ -2068,6 +2090,24 @@ document.addEventListener('click', async (e) => {
         shzShow({ found: true, title: x.title, artist: x.artist, cover: x.cover, track: t, library_id: null });
         break;
       }
+      case 'logout': logout(); break;
+      case 'user-menu': {
+        const r = a.getBoundingClientRect(); menuCtx = { tracks: [] };
+        openMenu(r.right - 220, r.bottom + 8, `<div class="menu-head"><b>${esc(ME.name)}</b><small>@${esc(ME.username)}${ME.is_admin ? ' · admin' : ''}</small></div>
+          <button data-m="go-account">${icon('gear')}A minha conta</button>${ME.is_admin ? `<button data-m="go-users">${icon('plus')}Criar utilizador</button>` : ''}
+          <hr><button data-m="logout">${icon('close')}Terminar sessão</button>`);
+        break;
+      }
+      case 'acc-save-name': { const n = $('#acc-name').value.trim(); if (!n) break; ME = await api(`/users/${ME.id}`, { method: 'PATCH', json: { name: n } }); renderUserChip(); toast('Nome guardado'); refreshView(); break; }
+      case 'acc-pass': userForm({ self: true }); break;
+      case 'modal-close': closeModal(); break;
+      case 'user-del': {
+        const uid = +a.dataset.uid; closeModal();
+        if (!(await confirmModal('Apagar esta conta?', 'Os gostos, playlists e histórico desta pessoa são apagados. As músicas da biblioteca ficam.'))) break;
+        await api(`/users/${uid}`, { method: 'DELETE' }); toast('Conta apagada'); refreshView(); break;
+      }
+      case 'user-new': userForm({}); break;
+      case 'user-edit': { const list = await api('/users'); const u = list.find((x) => x.id === +a.dataset.uid); if (u) userForm({ user: u }); break; }
       case 'mon-pause-all': { const p = !MON.data?.paused; await api('/settings', { method: 'PUT', json: { pl_sync_paused: p } }); S.pl_sync_paused = p; toast(p ? 'Atualização automática pausada' : 'Atualização automática retomada'); monAfter($('#mon-pop')?.dataset.sid); break; }
       case 'mon-sync-all': { const r = await api('/sources/sync-all', { json: {} }); toast(`A atualizar ${plural(r.count, 'playlist', 'playlists')}`); closeMonPop(); setTimeout(renderMonitor, 800); break; }
       case 'mon-sync': await api(`/sources/${a.dataset.sid}/sync`, { json: {} }); toast('A atualizar a playlist…'); setTimeout(renderMonitor, 600); break;
@@ -2690,24 +2730,89 @@ async function renameDevice() {
 }
 
 // ------------------------------------------------------------------ login + arranque
-function showLogin() { $('#login').hidden = false; $('#login-pass').focus(); }
+// ------------------------------------------------------------------ contas
+function renderUserChip() {
+  const c = $('#user-chip'); if (!c || !ME) return;
+  c.hidden = false; c.style.setProperty('--uc', ME.color || '#c8ff2e');
+  c.innerHTML = `<span class="avatar">${esc((ME.name || ME.username)[0].toUpperCase())}</span><span class="uc-name">${esc(ME.name)}</span>`;
+}
+function userForm({ user = null, self = false }) {
+  const isNew = !user && !self;
+  const html = `<form class="uform" id="uform">
+    <h3>${self ? 'Mudar a palavra-passe' : isNew ? 'Criar utilizador' : `Editar ${esc(user.name)}`}</h3>
+    ${isNew ? `<label>Nome<input class="inp" name="name" maxlength="40" placeholder="Ex.: Ana" required></label>
+      <label>Utilizador (para entrar)<input class="inp" name="username" maxlength="32" placeholder="ex.: ana" autocapitalize="none" spellcheck="false" required pattern="[a-zA-Z0-9._-]{2,32}"></label>` : ''}
+    ${!isNew && !self ? `<label>Nome<input class="inp" name="name" maxlength="40" value="${esc(user.name)}"></label>` : ''}
+    ${self && ME.has_password ? '<label>Palavra-passe atual<input class="inp" type="password" name="current_password" autocomplete="current-password" required></label>' : ''}
+    <label>${isNew ? 'Palavra-passe' : 'Nova palavra-passe'}${!isNew && !self ? ' <small>(deixa vazio para manter)</small>' : ''}<input class="inp" type="password" name="password" minlength="6" autocomplete="new-password" ${isNew || self ? 'required' : ''}></label>
+    ${!self ? `<label class="chk-row"><input type="checkbox" class="chk" name="is_admin" ${user?.is_admin ? 'checked' : ''} ${user?.id === 1 ? 'disabled' : ''}> Administrador <small>(pode criar contas e mudar as definições)</small></label>` : ''}
+    <p class="login-err" id="uform-err"></p>
+    <div class="uform-acts">
+      ${user && user.id !== 1 ? `<button type="button" class="danger-link" data-action="user-del" data-uid="${user.id}">Apagar conta</button>` : '<span></span>'}
+      <button type="button" class="ghost-btn" data-action="modal-close">Cancelar</button>
+      <button class="primary-btn sm" type="submit">${isNew ? 'Criar' : 'Guardar'}</button>
+    </div></form>`;
+  openModalHtml(html);
+  $('#uform input')?.focus();
+  $('#uform').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target), data = Object.fromEntries(f.entries());
+    data.is_admin = !!f.get('is_admin');
+    if (!data.password) delete data.password;
+    try {
+      if (isNew) { const u = await api('/users', { json: data }); toast(`Conta criada: ${u.username}`); }
+      else if (self) { await api(`/users/${ME.id}`, { method: 'PATCH', json: data }); toast('Palavra-passe mudada'); }
+      else { await api(`/users/${user.id}`, { method: 'PATCH', json: data }); toast('Conta atualizada'); }
+      closeModal(); if (route.name === 'settings') refreshView();
+      if (self) setTimeout(() => location.reload(), 900);
+    } catch (err) { $('#uform-err').textContent = err.message; }
+  };
+}
+
+// animação de arranque: fica pelo menos 1,7 s (para se ver a animação) e sai quando a app está pronta
+const SPLASH_T0 = performance.now();
+function hideSplash() {
+  const sp = $('#splash'); if (!sp || sp.classList.contains('out')) return;
+  setTimeout(() => { sp.classList.add('out'); setTimeout(() => sp.remove(), 700); }, Math.max(0, 1700 - (performance.now() - SPLASH_T0)));
+}
+setTimeout(hideSplash, 8000);   // nunca fica preso
+
+let ME = null;
+function showLogin() { hideSplash(); $('#login').hidden = false; ($('#login-user').value ? $('#login-pass') : $('#login-user')).focus(); }
+$('#login-user').value = store.get('last_user', '');
 $('#login-form').onsubmit = async (e) => {
   e.preventDefault();
   try {
-    await api('/login', { json: { password: $('#login-pass').value } });
+    const user = $('#login-user').value.trim().toLowerCase();
+    const r = await api('/login', { json: { username: user, password: $('#login-pass').value } });
+    store.set('last_user', r.user.username);
+    $('#login-pass').value = ''; $('#login-err').textContent = '';
     $('#login').hidden = true; boot();
   } catch (err) { $('#login-err').textContent = err.message; }
 };
+async function logout() {
+  try { await api('/logout', { json: {} }); } catch { /* */ }
+  location.reload();
+}
 
 async function boot() {
   let me;
   try { me = await fetch('/api/me').then((r) => r.json()); }
-  catch { restoreState(); render(); return; }                  // sem servidor/ligação: abre o modo offline
+  catch { restoreState(); render(); hideSplash(); return; }     // sem servidor/ligação: abre o modo offline
   if (me.auth_enabled && !me.authed) { showLogin(); return; }
+  ME = me.user;
+  if (ME) {
+    document.body.classList.toggle('is-admin', !!ME.is_admin);
+    // outra conta neste browser: não mostra a fila de quem estava antes
+    if (store.get('uid', ME.id) !== ME.id) { store.set('player', null); }
+    store.set('uid', ME.id);
+    renderUserChip();
+  }
   try { S = { ...S, ...(await api('/settings')).values }; } catch { /* */ }
   restoreState();
   loadLibrary();
   render();
+  hideSplash();
   connectWs();
   try { checkJobChanges((await api('/downloads')).jobs); } catch { /* */ }
 }

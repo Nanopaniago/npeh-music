@@ -131,8 +131,8 @@ def remove(plan):
                     conn.execute("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pl, rid))
                 else:
                     conn.execute("UPDATE playlist_tracks SET track_id=? WHERE playlist_id=? AND track_id=?", (kid, pl, rid))
-            if conn.execute("SELECT 1 FROM likes WHERE track_id=?", (rid,)).fetchone():
-                conn.execute("INSERT OR IGNORE INTO likes(track_id) VALUES (?)", (kid,))
+            conn.execute("INSERT OR IGNORE INTO likes(user_id, track_id, liked_at) SELECT user_id, ?, liked_at FROM likes WHERE track_id=?",
+                         (kid, rid))
             conn.execute("UPDATE plays SET track_id=? WHERE track_id=?", (kid, rid))
             if not conn.execute("SELECT 1 FROM lyrics WHERE track_id=? AND (synced IS NOT NULL OR plain IS NOT NULL)", (kid,)).fetchone():
                 conn.execute("DELETE FROM lyrics WHERE track_id=?", (kid,))

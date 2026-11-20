@@ -9,17 +9,29 @@
   <meta name="apple-mobile-web-app-title" content="nPlay">
   <title>nPlay</title>
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/static/icons/favicon-64.png?v=2" type="image/png">
-  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png?v=2">
-  <link rel="stylesheet" href="/static/style.css?v=21">
-  <link rel="stylesheet" href="/static/glass.css?v=21">
+  <link rel="icon" href="/static/icons/favicon-64.png?v=3" type="image/png">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=22">
+  <link rel="stylesheet" href="/static/glass.css?v=22">
 </head>
 <body>
+  <!-- animação de arranque: aparece logo, antes do JavaScript -->
+  <div id="splash" class="splash" aria-hidden="true">
+    <div class="sp-glow"></div>
+    <div class="sp-logo">
+      <img class="sp-l" src="/static/icons/logo-l.png" alt="">
+      <img class="sp-r" src="/static/icons/logo-r.png" alt="">
+      <img class="sp-n" src="/static/icons/logo-n.png" alt="">
+      <span class="sp-ring"></span>
+    </div>
+    <div class="sp-word">nPlay</div>
+    <div class="sp-bar"><i></i></div>
+  </div>
   <div id="app" class="layout">
     <aside class="sidebar">
       <nav class="panel nav">
         <a class="brand" href="#/">
-          <img src="/static/icons/mark.png?v=2" class="logo-word" alt="nPlay" width="44" height="44">
+          <img src="/static/icons/mark.png?v=3" class="logo-word" alt="nPlay" width="44" height="44">
         </a>
         <a href="#/" data-nav="home"><svg class="i"><use href="#i-home"/></svg>Início</a>
         <a href="#/search" data-nav="search"><svg class="i"><use href="#i-search"/></svg>Pesquisar</a>
@@ -58,7 +70,8 @@
           <button class="pill-btn listen-btn" data-action="shazam" title="Identificar a música que está a tocar à tua volta"><svg class="i"><use href="#i-listen"/></svg><span>Identificar</span></button>
           <button class="pill-btn only-mobile" data-action="devices" title="Dispositivos"><svg class="i"><use href="#i-devices"/></svg><span>Dispositivos</span></button>
           <a class="pill-btn" href="#/settings" title="Configurações"><svg class="i"><use href="#i-gear"/></svg><span>Configurações</span></a>
-          <button class="pill-btn" data-action="rescan" title="Voltar a ler a pasta de música"><svg class="i"><use href="#i-refresh"/></svg><span>Atualizar biblioteca</span></button>
+          <button class="pill-btn admin-only" data-action="rescan" title="Voltar a ler a pasta de música"><svg class="i"><use href="#i-refresh"/></svg><span>Atualizar biblioteca</span></button>
+          <button class="user-chip" id="user-chip" data-action="user-menu" title="A tua conta" hidden></button>
         </div>
       </div>
       <div id="view" class="view"></div>
@@ -137,7 +150,7 @@
         <g class="shz-disc" data-action="shz-go">
           <circle cx="200" cy="200" r="84" fill="url(#shzDisc)"/>
           <circle cx="200" cy="200" r="74" fill="none" stroke="#c7ccd6" stroke-width="2"/>
-          <image href="/static/icons/mark.png?v=2" x="184" y="184" width="32" height="32" opacity=".55"/>
+          <image href="/static/icons/mark.png?v=3" x="184" y="184" width="32" height="32" opacity=".55"/>
         </g>
       </svg>
       <div class="shz-result" id="shz-result" hidden></div>
@@ -191,8 +204,9 @@
 
   <div class="login" id="login" hidden>
     <form class="login-card" id="login-form">
-      <img src="/static/icons/mark.png?v=2" class="logo-word big" alt="nPlay" width="88" height="88">
-      <h1>Entrar</h1>
+      <img src="/static/icons/mark.png?v=3" class="logo-word big" alt="nPlay" width="88" height="88">
+      <h1>Entrar no nPlay</h1>
+      <input type="text" id="login-user" placeholder="Utilizador" autocomplete="username" autocapitalize="none" spellcheck="false">
       <input type="password" id="login-pass" placeholder="Palavra-passe" autocomplete="current-password" required>
       <button class="primary-btn" type="submit">Entrar</button>
       <p class="login-err" id="login-err"></p>
@@ -252,6 +266,6 @@
     <symbol id="i-radio" viewBox="0 0 24 24"><path d="M12 10.2a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6ZM7.8 7.8l1.4 1.4a4 4 0 0 0 0 5.6l-1.4 1.4a6 6 0 0 1 0-8.4Zm8.4 0a6 6 0 0 1 0 8.4l-1.4-1.4a4 4 0 0 0 0-5.6Zm-11.3-2.9 1.4 1.4a8 8 0 0 0 0 11.4l-1.4 1.4a10 10 0 0 1 0-14.2Zm14.2 0a10 10 0 0 1 0 14.2l-1.4-1.4a8 8 0 0 0 0-11.4Z" fill="currentColor"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15.2 3.8 5 5L9 20H4v-5Zm0 2.8L6 15.8V18h2.2l9.2-9.2Z" fill="currentColor"/></symbol>
   </svg>
-  <script src="/static/app.js?v=21"></script>
+  <script src="/static/app.js?v=22"></script>
 </body>
 </html>

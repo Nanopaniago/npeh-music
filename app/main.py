@@ -13,11 +13,11 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import artistinfo, catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import artistinfo, users, catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
-from .config import APP_PASSWORD, COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
-from .db import get_conn, init_db, row, rows
+from .config import COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
+from .db import CURRENT_UID, get_conn, init_db, row, rows
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 STATIC = Path(__file__).parent / "static"
@@ -81,6 +81,7 @@ def _after_job(job_id: int):
 @asynccontextmanager
 async def lifespan(app):
     migrated = init_db()
+    users.init()
     releases.init()
     recognize.init()
     artistinfo.init()
@@ -99,37 +100,82 @@ async def lifespan(app):
 app = FastAPI(title="Pobrefy", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
-# ---------------------------------------------------------------- auth
-def _token():
-    return hmac.new(SECRET_KEY.encode(), f"ok:{APP_PASSWORD}".encode(), hashlib.sha256).hexdigest()
-
-
-def _authed(request: Request):
-    if not APP_PASSWORD:
-        return True
-    return hmac.compare_digest(request.cookies.get(COOKIE, ""), _token())
+# ---------------------------------------------------------------- auth (vários utilizadores)
+ADMIN_ONLY = ("/api/users", "/api/settings", "/api/library/duplicates/remove", "/api/library/trash/empty",
+              "/api/system/update")
 
 
 @app.middleware("http")
 async def auth_mw(request: Request, call_next):
     p = request.url.path
-    if p.startswith("/api/") and p not in ("/api/login", "/api/me") and not _authed(request):
+    if not p.startswith("/api/") or p in ("/api/login", "/api/me", "/api/ws"):
+        return await call_next(request)
+    u = await asyncio.to_thread(users.from_token, request.cookies.get(COOKIE))
+    if not u:
         return JSONResponse({"detail": "login necessário"}, status_code=401)
-    return await call_next(request)
+    if request.method != "GET" and any(p == x or p.startswith(x + "/") for x in ADMIN_ONLY) and not u["is_admin"] \
+            and not p.startswith(f"/api/users/{u['id']}"):
+        return JSONResponse({"detail": "Só o administrador pode fazer isto."}, status_code=403)
+    request.state.user = u
+    token = CURRENT_UID.set(u["id"])
+    try:
+        return await call_next(request)
+    finally:
+        CURRENT_UID.reset(token)
 
 
 @app.get("/api/me")
 def me(request: Request):
-    return {"authed": _authed(request), "auth_enabled": bool(APP_PASSWORD)}
+    u = users.from_token(request.cookies.get(COOKIE))
+    return {"authed": bool(u), "auth_enabled": users.auth_enabled(), "user": u}
 
 
 @app.post("/api/login")
-def login(response: Response, password: str = Body(..., embed=True)):
-    if not APP_PASSWORD or hmac.compare_digest(password, APP_PASSWORD):
-        response.set_cookie(COOKIE, _token(), max_age=60 * 60 * 24 * 180, httponly=True, samesite="lax")
-        return {"ok": True}
-    time.sleep(1)
-    raise HTTPException(401, "Palavra-passe errada")
+def login(response: Response, password: str = Body(...), username: str = Body("")):
+    u = users.login(username, password)
+    if not u:
+        time.sleep(1)
+        raise HTTPException(401, "Utilizador ou palavra-passe errados")
+    response.set_cookie(COOKIE, users.make_token(u), max_age=users.TOKEN_DAYS * 86400, httponly=True, samesite="lax")
+    return {"ok": True, "user": users.public(u)}
+
+
+# ---------------------------------------------------------------- utilizadores
+@app.get("/api/users")
+def list_users(request: Request):
+    if not request.state.user["is_admin"]:
+        return [request.state.user]
+    return users.listing()
+
+
+@app.post("/api/users")
+def create_user(data: dict = Body(...)):
+    try:
+        return users.create(data.get("username"), data.get("name"), data.get("password"), data.get("is_admin"))
+    except users.UserError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/users/{uid}")
+def update_user(uid: int, request: Request, data: dict = Body(...)):
+    me_ = request.state.user
+    if uid != me_["id"] and not me_["is_admin"]:
+        raise HTTPException(403, "Só o administrador pode alterar outras contas.")
+    try:
+        return users.update(uid, data, by_admin=me_["is_admin"] and uid != me_["id"])
+    except users.UserError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/users/{uid}")
+def delete_user(uid: int, request: Request):
+    if not request.state.user["is_admin"] or uid == request.state.user["id"]:
+        raise HTTPException(403, "Não podes apagar esta conta.")
+    try:
+        users.delete(uid)
+    except users.UserError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 @app.post("/api/logout")
@@ -143,7 +189,7 @@ TRACK_SELECT = """
 SELECT t.id, t.title, t.artist, t.artist_id, t.album_id, t.track_no, t.disc_no, t.duration, t.added_at,
        t.release_date, t.genre_group,
        al.title AS album, al.cover IS NOT NULL AS has_cover, ar.name AS album_artist,
-       (SELECT 1 FROM likes l WHERE l.track_id=t.id) IS NOT NULL AS liked
+       (SELECT 1 FROM likes l WHERE l.track_id=t.id AND l.user_id=uid()) IS NOT NULL AS liked
 FROM tracks t
 LEFT JOIN albums al ON al.id=t.album_id
 LEFT JOIN artists ar ON ar.id=al.artist_id
@@ -192,14 +238,14 @@ def artist_cover_sql():
 def home():
     recent_albums = albums_q(order="al.added_at DESC, al.id DESC", limit=12)
     recently_played = tracks_q(
-        "t.id IN (SELECT track_id FROM plays GROUP BY track_id ORDER BY MAX(played_at) DESC LIMIT 12)")
+        "t.id IN (SELECT track_id FROM plays WHERE user_id=uid() GROUP BY track_id ORDER BY MAX(played_at) DESC LIMIT 12)")
     order = {r["track_id"]: i for i, r in enumerate(rows(
-        "SELECT track_id FROM plays GROUP BY track_id ORDER BY MAX(played_at) DESC LIMIT 12"))}
+        "SELECT track_id FROM plays WHERE user_id=uid() GROUP BY track_id ORDER BY MAX(played_at) DESC LIMIT 12"))}
     recently_played.sort(key=lambda t: order.get(t["id"], 99))
-    top = tracks_q("t.id IN (SELECT track_id FROM plays WHERE played_at > strftime('%s','now') - 2592000 "
+    top = tracks_q("t.id IN (SELECT track_id FROM plays WHERE user_id=uid() AND played_at > strftime('%s','now') - 2592000 "
                    "GROUP BY track_id ORDER BY COUNT(*) DESC LIMIT 10)")
     artists = rows(f"""SELECT a.id, a.name, {artist_cover_sql()} AS cover_album,
-                       (SELECT COUNT(*) FROM plays p JOIN tracks t ON t.id=p.track_id WHERE t.artist_id=a.id) AS plays
+                       (SELECT COUNT(*) FROM plays p JOIN tracks t ON t.id=p.track_id WHERE t.artist_id=a.id AND p.user_id=uid()) AS plays
                        FROM artists a WHERE EXISTS (SELECT 1 FROM albums al WHERE al.artist_id=a.id)
                        ORDER BY plays DESC, a.name LIMIT 10""")
     stats = row("""SELECT (SELECT COUNT(*) FROM tracks) AS tracks, (SELECT COUNT(*) FROM albums) AS albums,
@@ -247,9 +293,9 @@ def get_artist(artist_id: int):
     name_like = f"%{a['name']}%"
     a["top_tracks"] = tracks_q(
         "t.artist_id=? OR al.artist_id=? OR t.artist LIKE ?", (artist_id, artist_id, name_like),
-        "(SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id) DESC, t.added_at DESC", limit=6)
+        "(SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id AND p.user_id=uid()) DESC, (SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id) DESC, t.added_at DESC", limit=6)
     a["plays"] = row("""SELECT COUNT(*) c FROM plays p JOIN tracks t ON t.id=p.track_id
-                        WHERE t.artist_id=? OR t.artist LIKE ?""", (artist_id, name_like))["c"]
+                        WHERE p.user_id=uid() AND (t.artist_id=? OR t.artist LIKE ?)""", (artist_id, name_like))["c"]
     a["albums"] = albums_q("al.artist_id=?", (artist_id,), f"{REL_AL}, al.title")
     # lançamentos mais recentes primeiro: o último lançamento em destaque e as músicas mais novas
     a["latest"] = a["albums"][0] if a["albums"] else None
@@ -270,14 +316,14 @@ def stats_summary():
     """Números para os widgets do início."""
     now = int(time.time())
     day0 = now - (now % 86400)
-    today = row("SELECT COUNT(*) c FROM plays WHERE played_at>=?", (day0,))["c"]
+    today = row("SELECT COUNT(*) c FROM plays WHERE user_id=uid() AND played_at>=?", (day0,))["c"]
     week = rows("SELECT date(played_at,'unixepoch') d, COUNT(*) n, SUM(COALESCE(t.duration,180)) s FROM plays p "
-                "JOIN tracks t ON t.id=p.track_id WHERE played_at>=? GROUP BY d ORDER BY d", (now - 7 * 86400,))
+                "JOIN tracks t ON t.id=p.track_id WHERE p.user_id=uid() AND played_at>=? GROUP BY d ORDER BY d", (now - 7 * 86400,))
     minutes = int(sum(r["s"] or 0 for r in week) / 60)
     g = row("""SELECT COALESCE(t.genre_group,'Outros') g, COUNT(*) n FROM plays p JOIN tracks t ON t.id=p.track_id
-               WHERE played_at>=? GROUP BY g ORDER BY n DESC LIMIT 1""", (now - 30 * 86400,))
+               WHERE p.user_id=uid() AND played_at>=? GROUP BY g ORDER BY n DESC LIMIT 1""", (now - 30 * 86400,))
     ar = row(f"""SELECT a.id, a.name, {artist_cover_sql()} AS cover_album, COUNT(*) n FROM plays p JOIN tracks t ON t.id=p.track_id
-                 JOIN artists a ON a.id=t.artist_id WHERE played_at>=? GROUP BY a.id ORDER BY n DESC LIMIT 1""", (now - 30 * 86400,))
+                 JOIN artists a ON a.id=t.artist_id WHERE p.user_id=uid() AND played_at>=? GROUP BY a.id ORDER BY n DESC LIMIT 1""", (now - 30 * 86400,))
     lib = row("SELECT COUNT(*) c, COALESCE(SUM(duration),0) d FROM tracks")
     days = {r["d"]: r["n"] for r in week}
     spark = [days.get(time.strftime("%Y-%m-%d", time.gmtime(now - i * 86400)), 0) for i in range(6, -1, -1)]
@@ -430,13 +476,14 @@ def _search(q, like):
 # ---------------------------------------------------------------- likes & plays
 @app.get("/api/liked")
 def liked():
-    return tracks_q("t.id IN (SELECT track_id FROM likes)", order="(SELECT liked_at FROM likes WHERE track_id=t.id) DESC")
+    return tracks_q("t.id IN (SELECT track_id FROM likes WHERE user_id=uid())",
+                    order="(SELECT liked_at FROM likes WHERE track_id=t.id AND user_id=uid()) DESC")
 
 
 @app.put("/api/likes/{track_id}")
 def like(track_id: int):
     c = get_conn()
-    c.execute("INSERT OR IGNORE INTO likes(track_id) VALUES (?)", (track_id,))
+    c.execute("INSERT OR IGNORE INTO likes(user_id, track_id) VALUES (uid(), ?)", (track_id,))
     c.commit()
     return {"liked": True}
 
@@ -444,7 +491,7 @@ def like(track_id: int):
 @app.delete("/api/likes/{track_id}")
 def unlike(track_id: int):
     c = get_conn()
-    c.execute("DELETE FROM likes WHERE track_id=?", (track_id,))
+    c.execute("DELETE FROM likes WHERE track_id=? AND user_id=uid()", (track_id,))
     c.commit()
     return {"liked": False}
 
@@ -452,7 +499,7 @@ def unlike(track_id: int):
 @app.post("/api/plays/{track_id}")
 def played(track_id: int):
     c = get_conn()
-    c.execute("INSERT INTO plays(track_id) VALUES (?)", (track_id,))
+    c.execute("INSERT INTO plays(track_id, user_id) VALUES (?, uid())", (track_id,))
     c.execute("DELETE FROM plays WHERE played_at < strftime('%s','now') - 31536000")
     c.commit()
     return {"ok": True}
@@ -463,7 +510,7 @@ def list_playlists():
     pls = rows("""SELECT p.id, p.name, p.description, p.updated_at,
                   (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id=p.id) AS track_count,
                   (SELECT kind FROM pl_sources s WHERE s.playlist_id=p.id) AS synced
-                  FROM playlists p ORDER BY p.updated_at DESC""")
+                  FROM playlists p WHERE p.owner_id=uid() ORDER BY p.updated_at DESC""")
     for p in pls:
         p["covers"] = [r["album_id"] for r in rows(
             """SELECT DISTINCT t.album_id FROM playlist_tracks pt JOIN tracks t ON t.id=pt.track_id
@@ -480,7 +527,7 @@ def get_playlists():
 @app.post("/api/playlists")
 def create_playlist(name: str = Body("Nova playlist", embed=True)):
     c = get_conn()
-    cur = c.execute("INSERT INTO playlists(name) VALUES (?)", (name.strip() or "Nova playlist",))
+    cur = c.execute("INSERT INTO playlists(name, owner_id) VALUES (?, uid())", (name.strip() or "Nova playlist",))
     c.commit()
     return get_playlist(cur.lastrowid)
 
@@ -540,7 +587,7 @@ def sync_source(sid: int):
 
 @app.post("/api/sources/sync-all")
 def sync_all_sources():
-    ids = [r["id"] for r in rows("SELECT id FROM pl_sources WHERE enabled=1")]
+    ids = [r["id"] for r in rows("SELECT s.id FROM pl_sources s JOIN playlists p ON p.id=s.playlist_id WHERE s.enabled=1 AND p.owner_id=uid()")]
     for i in ids:
         sources.start_sync(i)
     return {"ok": True, "count": len(ids)}
@@ -568,7 +615,7 @@ def update_playlist(pid: int, data: dict = Body(...)):
     c = get_conn()
     for field in ("name", "description"):
         if field in data:
-            c.execute(f"UPDATE playlists SET {field}=?, updated_at=strftime('%s','now') WHERE id=?",
+            c.execute(f"UPDATE playlists SET {field}=?, updated_at=strftime('%s','now') WHERE id=? AND owner_id=uid()",
                       (str(data[field])[:200], pid))
     c.commit()
     return get_playlist(pid)
@@ -579,7 +626,7 @@ def delete_playlist(pid: int):
     c = get_conn()
     c.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
     c.execute("DELETE FROM pl_sources WHERE playlist_id=?", (pid,))
-    c.execute("DELETE FROM playlists WHERE id=?", (pid,))
+    c.execute("DELETE FROM playlists WHERE id=? AND owner_id=uid()", (pid,))
     c.commit()
     return {"ok": True}
 
@@ -587,7 +634,7 @@ def delete_playlist(pid: int):
 @app.post("/api/playlists/{pid}/tracks")
 def add_to_playlist(pid: int, track_ids: list[int] = Body(..., embed=True)):
     c = get_conn()
-    if not c.execute("SELECT 1 FROM playlists WHERE id=?", (pid,)).fetchone():
+    if not c.execute("SELECT 1 FROM playlists WHERE id=? AND owner_id=uid()", (pid,)).fetchone():
         raise HTTPException(404)
     pos = c.execute("SELECT COALESCE(MAX(position),0) FROM playlist_tracks WHERE playlist_id=?", (pid,)).fetchone()[0]
     have = {r[0] for r in c.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id=?", (pid,))}
@@ -846,7 +893,7 @@ def system_info():
                 "(SELECT COUNT(*) FROM artists) AS artists FROM tracks")
     return {"music_dir": str(MUSIC_DIR), "download_dir": str(app_settings.download_path(s)),
             "disk": system.disk(), "library": stats, "scan": scanner.state,
-            "auth_enabled": bool(APP_PASSWORD), "lyrics": lyrics.stats(), "canvas": canvasgen.stats(),
+            "auth_enabled": users.auth_enabled(), "lyrics": lyrics.stats(), "canvas": canvasgen.stats(),
             "synced": row("SELECT COUNT(*) c FROM pl_sources")["c"],
             "archive": downloader.ARCHIVE.exists() and sum(1 for _ in open(downloader.ARCHIVE, errors="ignore")),
             "cookies": downloader.COOKIES.exists() and int(downloader.COOKIES.stat().st_mtime)}
@@ -936,11 +983,12 @@ async def update_ytdlp():
 # ---------------------------------------------------------------- controlo remoto (WebSocket)
 @app.websocket("/api/ws")
 async def ws_endpoint(ws: WebSocket):
-    if APP_PASSWORD and not hmac.compare_digest(ws.cookies.get(COOKIE, ""), _token()):
+    u = await asyncio.to_thread(users.from_token, ws.cookies.get(COOKIE))
+    if not u:
         await ws.close(code=4401)
         return
     await ws.accept()
-    await hub.serve(ws)
+    await hub.serve(ws, u["id"])
 
 
 # ---------------------------------------------------------------- frontend

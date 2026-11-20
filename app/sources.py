@@ -139,6 +139,7 @@ def _fetch_deezer(url):
 
 
 def fetch(kind, url, mode="auto"):
+    url = url.split("#")[0]
     return _fetch_spotify(url, mode or "auto") if kind == "spotify" else _fetch_deezer(url)
 
 
@@ -184,12 +185,15 @@ def import_url(url):
     if not parsed:
         raise ValueError("Link de playlist não reconhecido (aceito playlists do Spotify e do Deezer).")
     kind, canon = parsed
+    from .db import CURRENT_UID
+    if CURRENT_UID.get() != 1:           # cada utilizador tem a sua cópia da playlist monitorizada
+        canon = f"{canon}#u{CURRENT_UID.get()}"
     existing = row("SELECT * FROM pl_sources WHERE url=?", (canon,))
     if existing:
         start_sync(existing["id"])
         return existing["playlist_id"], False
     conn = get_conn()
-    pid = conn.execute("INSERT INTO playlists(name) VALUES (?)", ("A importar playlist…",)).lastrowid
+    pid = conn.execute("INSERT INTO playlists(name, owner_id) VALUES (?, uid())", ("A importar playlist…",)).lastrowid
     sid = conn.execute("INSERT INTO pl_sources(playlist_id, url, kind, last_status) VALUES (?,?,?, 'syncing')",
                        (pid, canon, kind)).lastrowid
     conn.commit()
@@ -268,7 +272,7 @@ def dashboard():
                      (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id=s.playlist_id) AS in_playlist,
                      (SELECT t.album_id FROM playlist_tracks pt JOIN tracks t ON t.id=pt.track_id
                       WHERE pt.playlist_id=s.playlist_id ORDER BY pt.position LIMIT 1) AS cover_album
-                     FROM pl_sources s JOIN playlists p ON p.id=s.playlist_id ORDER BY p.name COLLATE NOCASE"""):
+                     FROM pl_sources s JOIN playlists p ON p.id=s.playlist_id WHERE p.owner_id=uid() ORDER BY p.name COLLATE NOCASE"""):
         h = interval(s, st)
         s["interval"] = h
         s["custom_interval"] = bool(s["interval_hours"])

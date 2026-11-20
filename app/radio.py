@@ -37,7 +37,7 @@ def suggest(seeds, exclude=(), n=20):
     by_id = {t["id"]: t for t in tracks}
     seeds = [s for s in seeds if s in by_id]
     if not seeds:  # sem sementes: usa o que ouviste por último
-        seeds = [r[0] for r in conn.execute("SELECT track_id FROM plays ORDER BY played_at DESC LIMIT 3") if r[0] in by_id]
+        seeds = [r[0] for r in conn.execute("SELECT track_id FROM plays WHERE user_id=uid() ORDER BY played_at DESC LIMIT 3") if r[0] in by_id]
 
     s_full, s_words, s_artists = set(), set(), set()
     for sid in seeds:
@@ -51,10 +51,10 @@ def suggest(seeds, exclude=(), n=20):
         co = {r[0] for r in conn.execute(
             f"SELECT DISTINCT track_id FROM playlist_tracks WHERE playlist_id IN "
             f"(SELECT playlist_id FROM playlist_tracks WHERE track_id IN ({q}))", seeds)}
-    plays = dict(conn.execute("SELECT track_id, COUNT(*) FROM plays WHERE played_at > ? GROUP BY track_id",
+    plays = dict(conn.execute("SELECT track_id, COUNT(*) FROM plays WHERE user_id=uid() AND played_at > ? GROUP BY track_id",
                               (now - 180 * 86400,)).fetchall())
-    recent = {r[0] for r in conn.execute("SELECT track_id FROM plays WHERE played_at > ?", (now - 3 * 3600,))}
-    liked = {r[0] for r in conn.execute("SELECT track_id FROM likes")}
+    recent = {r[0] for r in conn.execute("SELECT track_id FROM plays WHERE user_id=uid() AND played_at > ?", (now - 3 * 3600,))}
+    liked = {r[0] for r in conn.execute("SELECT track_id FROM likes WHERE user_id=uid()")}
 
     scored = []
     for t in tracks:

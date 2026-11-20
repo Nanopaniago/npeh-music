@@ -1,3 +1,4 @@
+import contextvars
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -52,8 +53,10 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
 );
 CREATE INDEX IF NOT EXISTS idx_pt_playlist ON playlist_tracks(playlist_id, position);
 CREATE TABLE IF NOT EXISTS likes (
-    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
-    liked_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    user_id INTEGER NOT NULL DEFAULT 1,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    liked_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (user_id, track_id)
 );
 CREATE TABLE IF NOT EXISTS plays (
     id INTEGER PRIMARY KEY,
@@ -127,6 +130,8 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 _local = threading.local()
+# utilizador do pedido atual (ver users.py); as consultas usam a função SQL uid()
+CURRENT_UID = contextvars.ContextVar("uid", default=1)
 
 
 def get_conn() -> sqlite3.Connection:
@@ -135,6 +140,7 @@ def get_conn() -> sqlite3.Connection:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.create_function("uid", 0, lambda: CURRENT_UID.get())
         _local.conn = conn
     return conn
 
@@ -163,6 +169,20 @@ def init_db():
         if col not in tcols:      # organização por género e data de lançamento
             conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {decl}")
             migrated.add(col)
+    # vários utilizadores: gostos, histórico e playlists passam a ter dono (a conta 1 fica com o que já existia)
+    if "user_id" not in {r[1] for r in conn.execute("PRAGMA table_info(likes)")}:
+        conn.executescript("""
+            CREATE TABLE likes_mu (user_id INTEGER NOT NULL DEFAULT 1, track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                                   liked_at INTEGER NOT NULL DEFAULT (strftime('%s','now')), PRIMARY KEY (user_id, track_id));
+            INSERT INTO likes_mu(user_id, track_id, liked_at) SELECT 1, track_id, liked_at FROM likes;
+            DROP TABLE likes;
+            ALTER TABLE likes_mu RENAME TO likes;
+        """)
+    if "user_id" not in {r[1] for r in conn.execute("PRAGMA table_info(plays)")}:
+        conn.execute("ALTER TABLE plays ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_plays_user ON plays(user_id, played_at)")
+    if "owner_id" not in {r[1] for r in conn.execute("PRAGMA table_info(playlists)")}:
+        conn.execute("ALTER TABLE playlists ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1")
     scols = {r[1] for r in conn.execute("PRAGMA table_info(pl_sources)")}
     for col, decl in (("interval_hours", "INTEGER"), ("auto_download", "INTEGER DEFAULT 1"),
                       ("spotify_mode", "TEXT DEFAULT 'auto'"), ("last_added", "INTEGER DEFAULT 0")):

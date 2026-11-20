@@ -19,7 +19,7 @@ log = logging.getLogger("recognize")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS recognitions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT, artist TEXT, cover TEXT, dz_id INTEGER, shazam_url TEXT, at INTEGER
+    title TEXT, artist TEXT, cover TEXT, dz_id INTEGER, shazam_url TEXT, at INTEGER, user_id INTEGER DEFAULT 1
 );
 """
 
@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS recognitions (
 def init():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    if "user_id" not in {r[1] for r in conn.execute("PRAGMA table_info(recognitions)")}:
+        conn.execute("ALTER TABLE recognitions ADD COLUMN user_id INTEGER DEFAULT 1")
     conn.commit()
 
 
@@ -92,7 +94,7 @@ async def identify(raw: bytes):
         log.info("Deezer indisponível: %s", e)
     lib = await asyncio.to_thread(_library_id, found["title"], found["artist"], (track or {}).get("duration"))
     conn = get_conn()
-    conn.execute("INSERT INTO recognitions(title, artist, cover, dz_id, shazam_url, at) VALUES (?,?,?,?,?,?)",
+    conn.execute("INSERT INTO recognitions(title, artist, cover, dz_id, shazam_url, at, user_id) VALUES (?,?,?,?,?,?,uid())",
                  (found["title"], found["artist"], (track or {}).get("cover") or found["cover"],
                   (track or {}).get("id"), found["shazam_url"], int(time.time())))
     conn.commit()
@@ -100,5 +102,5 @@ async def identify(raw: bytes):
 
 
 def history(limit=12):
-    rows = get_conn().execute("SELECT * FROM recognitions ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    rows = get_conn().execute("SELECT * FROM recognitions WHERE user_id=uid() ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [dict(r) for r in rows]

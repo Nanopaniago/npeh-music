@@ -142,3 +142,11 @@ app/
 - **Dispositivos**: usa o WebSocket `/api/ws`. O Cloudflare Tunnel deixa-o passar sem configuração extra.
 - **Offline**: as músicas guardam-se na cache do browser de cada dispositivo. No iPhone, instala a app no ecrã principal para o iOS não apagar a cache.
 - O dispositivo que recebe a reprodução tem de ter o Pobrefy aberto e ter tido pelo menos um toque no ecrã, porque os browsers bloqueiam áudio sem interação.
+
+## Várias contas
+
+- A conta original é o administrador: utilizador **`nano`**, com a palavra-passe que já existia (`APP_PASSWORD`).
+- Em **Configurações → Utilizadores** o administrador cria contas (nome, utilizador, palavra-passe, opção de administrador), muda palavras-passe e apaga contas.
+- Cada pessoa tem os seus gostos, playlists, histórico, estatísticas, músicas identificadas e dispositivos do controlo remoto. A biblioteca de música e os downloads são partilhados.
+- Só os administradores mudam as definições do servidor, apagam duplicados, esvaziam o lixo e criam contas. Cada pessoa pode mudar o seu nome e a sua palavra-passe.
+- Mudar a palavra-passe termina as sessões dessa conta noutros dispositivos.
