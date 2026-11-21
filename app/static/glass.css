@@ -310,3 +310,5 @@ body:not(.is-admin) .admin-only { display: none !important; }
 .uform .chk-row { justify-content: flex-start; flex-wrap: wrap; }
 .uform .chk-row input { width: 20px !important; height: 20px; flex: none; margin: 0; padding: 0; }
 .uform .chk-row small { flex-basis: 100%; padding-left: 30px; margin-top: -4px; }
+.dl-prio { margin: 0 0 14px; padding: 10px 14px; border-radius: 14px; font-size: 13px; color: var(--muted); background: #c8ff2e0d; border: 1px solid #c8ff2e26; }
+.dl-prio b { color: var(--citric); }

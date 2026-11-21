@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 
-from . import dedupe, discover, downloader
+from . import load, dedupe, discover, downloader
 from . import settings as app_settings
 from .db import get_conn
 
@@ -91,10 +91,11 @@ def check(max_artists=200, pause=0.35):
                     found += 1
                     log.info("Novo lançamento: %s — %s (%s)", a["name"], al.get("title"), rd)
                     if auto:
-                        queue(al["id"], conn)
+                        queue(al["id"], conn, auto=True)
             conn.commit()
             state["checked"] += 1
             time.sleep(pause)
+            load.wait_idle()               # prioridade 3: cede a vez aos downloads
         state.update(last_run=int(time.time()), found=found)
     finally:
         state["running"] = False
@@ -102,13 +103,14 @@ def check(max_artists=200, pause=0.35):
     return found
 
 
-def queue(rid, conn=None):
+def queue(rid, conn=None, auto=False):
     """Descarrega o lançamento (todas as faixas)."""
     conn = conn or get_conn()
     r = conn.execute("SELECT * FROM releases WHERE id=?", (rid,)).fetchone()
     d = discover.album_detail(rid)
     items = [{"artist": t["artist"], "title": t["title"], "duration": t["duration"]} for t in d["tracks_list"]]
-    job_id, queued, skipped = downloader.enqueue_items(items, f"Novo lançamento: {d['title']} — {d['artist']}")
+    job_id, queued, skipped = downloader.enqueue_items(items, f"Novo lançamento: {d['title']} — {d['artist']}",
+                                                       downloader.PRIO_AUTO if auto else downloader.PRIO_MANUAL)
     if r:
         conn.execute("UPDATE releases SET queued=1 WHERE id=?", (rid,))
         conn.commit()

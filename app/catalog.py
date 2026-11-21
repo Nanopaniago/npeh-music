@@ -9,7 +9,7 @@ import re
 import threading
 import time
 
-from . import dedupe, discover
+from . import dedupe, discover, load
 from .db import get_conn
 
 log = logging.getLogger("catalog")
@@ -154,6 +154,9 @@ def enrich(limit=400, pause=0.15):
             if n % 20 == 0:
                 conn.commit()
             time.sleep(pause)
+            if load.busy():                # prioridade 3: grava o que tem e espera que os downloads acabem
+                conn.commit()
+                load.wait_idle()
         conn.commit()
         refresh_albums(conn)
     finally:

@@ -5,4 +5,4 @@ if [ "${UPDATE_YTDLP:-1}" = "1" ]; then
   echo "[pobrefy] a atualizar yt-dlp…"
   /opt/spotdl/bin/pip install -q --no-cache-dir -U "yt-dlp[default]" >/dev/null 2>&1 || echo "[pobrefy] não foi possível atualizar o yt-dlp (sem rede?)"
 fi
-exec uvicorn app.main:app --host 0.0.0.0 --port 8800 --proxy-headers --forwarded-allow-ips="*" --log-level warning
+exec uvicorn app.main:app --loop asyncio --host 0.0.0.0 --port 8800 --proxy-headers --forwarded-allow-ips="*" --log-level warning

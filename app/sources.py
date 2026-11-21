@@ -201,16 +201,16 @@ def import_url(url):
     return pid, True
 
 
-def start_sync(source_id):
+def start_sync(source_id, auto=False):
     if source_id in syncing:
         return
     syncing.add(source_id)
     get_conn().execute("UPDATE pl_sources SET last_status='syncing' WHERE id=?", (source_id,))
     get_conn().commit()
-    threading.Thread(target=sync, args=(source_id,), daemon=True).start()
+    threading.Thread(target=sync, args=(source_id, auto), daemon=True).start()
 
 
-def sync(source_id):
+def sync(source_id, auto=False):
     try:
         with _lock:  # uma sincronização de cada vez (poupa RAM no servidor)
             s = row("SELECT * FROM pl_sources WHERE id=?", (source_id,))
@@ -245,7 +245,8 @@ def sync(source_id):
             todo = [{"artist": it["artist"], "title": it["title"], "duration": it["duration"],
                      "query": it["query"] if RE_SPOTIFY_TRACK.match(it["query"] or "") else None} for it in items]
             for i in range(0, len(todo), 100):
-                downloader.enqueue_items(todo[i:i + 100], f"Playlist · {name or 'importada'}")
+                downloader.enqueue_items(todo[i:i + 100], f"Playlist · {name or 'importada'}",
+                                         downloader.PRIO_AUTO if auto else downloader.PRIO_MANUAL)
     finally:
         syncing.discard(source_id)
 

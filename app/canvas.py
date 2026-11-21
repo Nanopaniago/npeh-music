@@ -152,9 +152,8 @@ def _worker():
     while True:
         _p, _t, tid = _q.get()
         # o yt-dlp do vídeo curto também abre o Deno: espera que os downloads de música acabem (poupa memória)
-        from . import downloader
-        while downloader._current.get("proc") is not None:
-            time.sleep(5)
+        from . import load
+        load.wait_idle(settle=20)      # prioridade 2: vídeos curtos só com a fila de músicas vazia
         state.update(running=True, current=tid)
         try:
             if make(tid) == "ok":

@@ -198,6 +198,8 @@ def init_db():
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     if "label" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN label TEXT")
+    if "priority" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0")
     conn.execute("DELETE FROM dl_items WHERE status NOT IN ('queued','running') AND created_at < strftime('%s','now') - 2592000")
     conn.commit()
     return migrated

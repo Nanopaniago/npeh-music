@@ -1885,7 +1885,8 @@ async function refreshJobs() {
   try { d = await api('/downloads'); } catch { return; }
   checkJobChanges(d.jobs);
   const box = $('#jobs'); if (!box) return;
-  $('#dl-warn').innerHTML = d.spotdl ? '' : '<div class="warn">O spotDL não foi encontrado no servidor. Usa a imagem Docker incluída (já traz spotDL + ffmpeg).</div>';
+  $('#dl-warn').innerHTML = (d.spotdl ? '' : '<div class="warn">O spotDL não foi encontrado no servidor. Usa a imagem Docker incluída (já traz spotDL + ffmpeg).</div>')
+    + (d.busy ? '<p class="dl-prio"><b>Prioridade às músicas e capas.</b> Letras, vídeos curtos e a organização da biblioteca continuam quando a fila esvaziar. Os teus pedidos passam à frente das playlists monitorizadas.</p>' : '');
   if (!d.jobs.length) { box.innerHTML = '<p class="dl-hint">Sem downloads ainda.</p>'; return; }
   box.innerHTML = d.jobs.map((j) => {
     const pct = j.total ? Math.round(((j.done + j.failed) / j.total) * 100) : 0;
@@ -1893,7 +1894,7 @@ async function refreshJobs() {
     const nq = j.query.split('\n').length;
     const label = j.label || (nq > 1 ? `${nq} músicas` : j.query.replace(/^https?:\/\/open\.spotify\.com\/(intl-\w+\/)?/, 'spotify/').replace(/\?.*$/, ''));
     return `<div class="job"><div class="job-top"><div class="job-q" title="${esc(j.query)}">${esc(label)}</div>
-      <span class="job-st ${j.status}">${ST[j.status] || j.status}</span>
+      <span class="job-st ${j.status}">${ST[j.status] || j.status}${j.priority && j.status === 'queued' ? ' · auto' : ''}</span>
       <button class="icon-btn" data-action="dl-cancel" data-id="${j.id}" title="${active ? 'Cancelar' : 'Remover'}">${icon(active ? 'close' : 'trash')}</button></div>
       ${j.status === 'running' || j.status === 'queued' ? `<div class="job-bar ${!j.total ? 'indet' : ''}"><div style="width:${pct}%"></div></div>` : ''}
       <div class="job-meta"><span>${j.total ? `${j.done}/${j.total} faixas` : (j.status === 'queued' ? 'à espera' : j.done ? `${j.done} faixas` : '')}${j.failed ? ` · ${j.failed} com erro` : ''}</span><span>${ago(j.finished_at || j.created_at)}</span></div>

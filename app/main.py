@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
-from . import artistinfo, users, catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
+from . import artistinfo, load, users, catalog, charts, discover, recognize, releases, downloader, duplicates, lyrics, radio, scanner, sources, system
 from .remote import hub
 from . import settings as app_settings
 from .config import COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
@@ -30,7 +30,7 @@ async def auto_scan_loop():
         await asyncio.sleep(60)
         try:
             mins = app_settings.get_all()["auto_scan_min"]
-            if mins and not scanner.state["running"] and time.time() - (scanner.state["last_run"] or 0) >= mins * 60:
+            if mins and not load.busy() and not scanner.state["running"] and time.time() - (scanner.state["last_run"] or 0) >= mins * 60:
                 await asyncio.to_thread(scanner.scan)
         except Exception:  # noqa
             logging.getLogger("auto_scan").exception("falhou")
@@ -41,8 +41,10 @@ async def playlist_sync_loop():
     await asyncio.sleep(30)
     while True:
         try:
-            for sid in await asyncio.to_thread(sources.due_sources):
-                sources.start_sync(sid)
+            # prioridade 3: só verifica as playlists monitorizadas com a fila de downloads vazia
+            if not load.busy():
+                for sid in await asyncio.to_thread(sources.due_sources):
+                    sources.start_sync(sid, auto=True)
         except Exception:  # noqa
             logging.getLogger("sources").exception("falhou")
         await asyncio.sleep(300)
@@ -53,7 +55,7 @@ async def releases_loop():
     await asyncio.sleep(120)
     while True:
         try:
-            if app_settings.get_all()["rel_notify"] and releases.loop_once_due():
+            if app_settings.get_all()["rel_notify"] and not load.busy() and releases.loop_once_due():
                 await asyncio.to_thread(releases.check)
         except Exception:  # noqa
             logging.getLogger("releases").exception("falhou")
@@ -781,9 +783,9 @@ def new_download(query: str | None = Body(None, embed=True),
 
 @app.get("/api/downloads")
 def list_downloads():
-    jobs = rows("SELECT id, query, label, status, total, done, failed, created_at, finished_at, "
+    jobs = rows("SELECT id, query, label, status, total, done, failed, created_at, finished_at, COALESCE(priority, 0) AS priority, "
                 "substr(log, -1500) AS log_tail FROM jobs ORDER BY id DESC LIMIT 50")
-    return {"jobs": jobs, "spotdl": downloader.spotdl_available()}
+    return {"jobs": jobs, "spotdl": downloader.spotdl_available(), "busy": load.busy()}
 
 
 @app.delete("/api/downloads/{job_id}")

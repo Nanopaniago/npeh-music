@@ -9,13 +9,14 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
 
 import mutagen
 
-from . import dedupe, lyrics, scanner
+from . import dedupe, load, lyrics, scanner, ytsource
 from . import settings as app_settings
 from . import catalog
 from .config import AUDIO_EXTS, DATA_DIR, MUSIC_DIR, SPOTDL_EXTRA_ARGS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
@@ -23,9 +24,12 @@ from .db import get_conn, row
 
 log = logging.getLogger("downloader")
 
-queue: "asyncio.Queue[int]" = asyncio.Queue()
+_wake: asyncio.Event | None = None
 _current = {"job_id": None, "proc": None}
 _loop = None
+# prioridade dos jobs: o que pedes à mão passa à frente das playlists monitorizadas e dos lançamentos automáticos
+PRIO_MANUAL, PRIO_AUTO = 0, 5
+IDLE_TIMEOUT = int(os.environ.get("NPLAY_DL_IDLE", 600))     # sem nenhuma linha do spotDL durante 10 min = preso → termina e passa à fonte alternativa
 ARCHIVE = DATA_DIR / "spotdl-archive.txt"   # URLs do Spotify já descarregados (travão extra contra repetidos)
 # Os downloads acontecem numa pasta escondida dentro da pasta da música (o scanner ignora pastas com ".").
 # Só depois de verificado (descodifica até ao fim e tem a duração certa) é que o ficheiro entra na biblioteca.
@@ -105,9 +109,7 @@ def build_cmd(queries, s, archive=None):
         cmd += ["--cookie-file", str(COOKIES)]
     if bitrate:
         cmd += ["--bitrate", bitrate]
-    if s["dl_lyrics"]:
-        # letra sincronizada primeiro; --generate-lrc guarda também um .lrc ao lado da música
-        cmd += ["--lyrics", "synced", "genius", "musixmatch", "azlyrics", "--generate-lrc"]
+    # as letras já não são procuradas aqui (prioridade 2): ficam para depois, quando a fila de músicas esvaziar
     if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
         cmd += ["--client-id", SPOTIFY_CLIENT_ID, "--client-secret", SPOTIFY_CLIENT_SECRET]
     if SPOTDL_EXTRA_ARGS:
@@ -115,23 +117,30 @@ def build_cmd(queries, s, archive=None):
     return cmd
 
 
-def _insert_job(query: str, label: str | None = None) -> int:
+def _insert_job(query: str, label: str | None = None, priority: int = PRIO_MANUAL) -> int:
     conn = get_conn()
-    cur = conn.execute("INSERT INTO jobs(query, label) VALUES (?, ?)", (query.strip(), label))
+    cur = conn.execute("INSERT INTO jobs(query, label, priority) VALUES (?, ?, ?)", (query.strip(), label, priority))
     conn.commit()
     return cur.lastrowid
 
 
-def _put(job_id: int):
-    # chamado a partir de threads dos endpoints: a fila asyncio só é segura dentro do loop
-    if _loop is not None:
-        _loop.call_soon_threadsafe(queue.put_nowait, job_id)
-    else:
-        queue.put_nowait(job_id)
+def _refresh_load():
+    n = get_conn().execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0]
+    was = load.busy()
+    load.state.update(running=_current["job_id"], queued=n)
+    if was and not load.busy():
+        load.state["since"] = time.time()
 
 
-def enqueue(query: str, label: str | None = None) -> int:
-    jid = _insert_job(query, label)
+def _put(job_id: int = 0):
+    # chamado a partir de threads dos endpoints: o Event asyncio só é seguro dentro do loop
+    _refresh_load()
+    if _loop is not None and _wake is not None:
+        _loop.call_soon_threadsafe(_wake.set)
+
+
+def enqueue(query: str, label: str | None = None, priority: int = PRIO_MANUAL) -> int:
+    jid = _insert_job(query, label, priority)
     _put(jid)
     return jid
 
@@ -139,7 +148,7 @@ def enqueue(query: str, label: str | None = None) -> int:
 REASONS = {"library": "já está na biblioteca", "pending": "já está na fila", "duplicate": "repetida no pedido"}
 
 
-def enqueue_items(items, label: str | None = None):
+def enqueue_items(items, label: str | None = None, priority: int = PRIO_MANUAL):
     """Enfileira músicas [{artist, title, duration}] ignorando as que já existem. -> (job_id|None, queued, skipped)"""
     lib, pend = dedupe.library_index(), dedupe.pending_keys()
     todo, skipped, seen = [], [], set()
@@ -158,7 +167,7 @@ def enqueue_items(items, label: str | None = None):
         todo.append((key, artist, title, dur, q if RE_SPOTIFY_TRACK.match(q) else f"{artist} - {title}"))
     if not todo:
         return None, 0, skipped
-    jid = _insert_job("\n".join(q for *_, q in todo), label)
+    jid = _insert_job("\n".join(q for *_, q in todo), label, priority)
     conn = get_conn()
     conn.executemany("INSERT INTO dl_items(job_id, key, artist, title, duration) VALUES (?,?,?,?,?)",
                      [(jid, k, a, t, d) for k, a, t, d, _ in todo])
@@ -325,10 +334,25 @@ async def _run_job(job_id: int):
         proc = await asyncio.create_subprocess_exec(
             *cmd, cwd=str(stage),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,        # grupo próprio: dá para terminar o spotDL e tudo o que ele abriu
         )
         _current.update(job_id=job_id, proc=proc)
+        _refresh_load()
         att_done = att_failed = 0
-        async for raw in proc.stdout:
+        deadline = time.time() + max(20 * 60, 6 * 60 * max(1, len(queries)))
+        stuck = False
+        while True:
+            try:
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=IDLE_TIMEOUT)
+            except asyncio.TimeoutError:
+                raw, stuck = None, True
+            if raw is not None and not raw:
+                break                                   # fim normal da saída
+            if stuck or time.time() > deadline:
+                _append_log(job_id, "✗ o spotDL deixou de responder — terminado; passa à fonte alternativa")
+                _kill(proc)
+                stuck = True
+                break
             line = raw.decode(errors="replace").rstrip()
             if not line.strip():
                 continue
@@ -342,8 +366,16 @@ async def _run_job(job_id: int):
             if att_done > done or attempt == 1:
                 done, failed = max(done, att_done), att_failed
                 _update(job_id, done=done, failed=failed, total=max(total, done + failed))
-        rc = await proc.wait()
-        _current.update(job_id=None, proc=None)
+        try:
+            rc = await asyncio.wait_for(proc.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            # o processo já fechou a saída mas o fim não foi assinalado (aconteceu: ficou 32 h "a descarregar")
+            _kill(proc)
+            rc = proc.returncode if proc.returncode is not None else 0
+            _append_log(job_id, "→ o spotDL terminou sem confirmar; a continuar")
+        if stuck:
+            rc = 0
+        _current["proc"] = None
         killed = rc < 0 or rc in (137, 143)
         if killed:
             _append_log(job_id, "✗ o spotDL foi interrompido (falta de memória no servidor?)"
@@ -370,6 +402,15 @@ async def _run_job(job_id: int):
         if not bad:
             break
     cancelled = (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled"
+    # fonte alternativa (yt-dlp direto) para o que o spotDL não conseguiu
+    if not cancelled:
+        recovered = await _fallback(job_id, queries, stage, s, verified)
+        if recovered:
+            done += recovered
+            failed = max(0, failed - recovered)
+            bad = {k: v for k, v in bad.items() if (stage / k).exists()}
+            rc = 0
+        cancelled = (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled"
     if cancelled:
         shutil.rmtree(stage, ignore_errors=True)
         status = "cancelled"
@@ -405,33 +446,110 @@ async def _run_job(job_id: int):
     asyncio.get_running_loop().run_in_executor(None, lyrics.prefetch, 60)
 
 
+def _kill(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+
+def _wanted(job_id, queries):
+    """Músicas que o job devia trazer: [(artist, title, duration)]."""
+    items = get_conn().execute("SELECT artist, title, duration FROM dl_items WHERE job_id=?", (job_id,)).fetchall()
+    if items:
+        return [(r[0], r[1], r[2]) for r in items]
+    out = []
+    for q in queries:
+        if RE_URL.search(q) or " - " not in q:
+            continue                            # links: o spotDL é que sabe o que contêm
+        a, t = q.split(" - ", 1)
+        out.append((a.strip(), t.strip(), None))
+    return out
+
+
+async def _fallback(job_id, queries, stage, s, verified):
+    """Procura no YouTube Music / YouTube / SoundCloud as músicas que ainda faltam. -> nº recuperadas."""
+    wanted = _wanted(job_id, queries)
+    if not wanted:
+        return 0
+    have = set()
+    for p in _audio_files(stage):
+        a, t = _tags(p)
+        if a and t:
+            have.add(dedupe.key_for(a.split(",")[0], t))
+            have.add(dedupe.key_for(a, t))
+    lib = dedupe.library_index()
+    missing = [(a, t, d) for a, t, d in wanted
+               if dedupe.key_for(a, t) not in have and dedupe.key_for(a.split(",")[0], t) not in have
+               and dedupe.status(t, a, d, lib, set()) != "library"]
+    if not missing:
+        return 0
+    _append_log(job_id, f"→ fonte alternativa para {len(missing)} música(s) em falta")
+    got = 0
+    for a, t, d in missing:
+        if (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") == "cancelled":
+            break
+        path = await asyncio.to_thread(ytsource.fetch, a, t, d, stage, s, lambda l: _append_log(job_id, l))
+        if not path:
+            _append_log(job_id, f"✗ {a} - {t}: nenhuma fonte tinha uma versão completa")
+            continue
+        ok, why = await asyncio.to_thread(verify_file, job_id, path)
+        if ok:
+            verified.add(str(path.relative_to(stage)))
+            got += 1
+        else:
+            _append_log(job_id, f"✗ {path.name}: {why} — apagado")
+            path.unlink(missing_ok=True)
+    return got
+
+
+def _next_job():
+    r = get_conn().execute("SELECT id FROM jobs WHERE status='queued' ORDER BY COALESCE(priority, 0), id LIMIT 1").fetchone()
+    return r[0] if r else None
+
+
 async def worker():
-    global _loop
+    global _loop, _wake
     _loop = asyncio.get_running_loop()
+    _wake = asyncio.Event()
     conn = get_conn()
     shutil.rmtree(STAGING, ignore_errors=True)    # downloads a meio de um reinício nunca chegam à biblioteca
     # retoma jobs interrompidos por um reinício
-    for r in conn.execute("SELECT id FROM jobs WHERE status IN ('queued','running') ORDER BY id").fetchall():
-        conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (r[0],))
-        queue.put_nowait(r[0])
+    conn.execute("UPDATE jobs SET status='queued' WHERE status='running'")
     conn.commit()
+    load.state["since"] = time.time()
     while True:
-        job_id = await queue.get()
+        _refresh_load()
+        job_id = _next_job()
+        if job_id is None:
+            _wake.clear()
+            try:
+                await asyncio.wait_for(_wake.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
+            continue
+        _current["job_id"] = job_id
+        _refresh_load()
         try:
             await _run_job(job_id)
         except Exception as e:  # noqa
             log.exception("Job %s falhou", job_id)
             _append_log(job_id, f"Erro: {e}")
             _update(job_id, status="failed", finished_at=int(time.time()))
+            _finalize_items(job_id, "failed")
         finally:
-            queue.task_done()
+            _current.update(job_id=None, proc=None)
+            if (row("SELECT status FROM jobs WHERE id=?", (job_id,)) or {}).get("status") in ("queued", "running"):
+                _update(job_id, status="failed", finished_at=int(time.time()))
+            _refresh_load()
 
 
 def cancel(job_id: int):
     _update(job_id, status="cancelled", finished_at=int(time.time()))
     _finalize_items(job_id, "cancelled")
     if _current["job_id"] == job_id and _current["proc"]:
-        try:
-            _current["proc"].terminate()
-        except ProcessLookupError:
-            pass
+        _kill(_current["proc"])
+    _refresh_load()

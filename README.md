@@ -150,3 +150,13 @@ app/
 - Cada pessoa tem os seus gostos, playlists, histórico, estatísticas, músicas identificadas e dispositivos do controlo remoto. A biblioteca de música e os downloads são partilhados.
 - Só os administradores mudam as definições do servidor, apagam duplicados, esvaziam o lixo e criam contas. Cada pessoa pode mudar o seu nome e a sua palavra-passe.
 - Mudar a palavra-passe termina as sessões dessa conta noutros dispositivos.
+
+## Prioridades e fontes dos downloads
+
+1. **Música + capa** têm sempre a vez. Os pedidos feitos à mão passam à frente das playlists monitorizadas e dos lançamentos automáticos.
+2. **Letras e vídeos curtos** só são procurados quando a fila de músicas está vazia (e só se existirem).
+3. **O resto** (géneros/datas, novos lançamentos, verificação das playlists, releitura da pasta) espera que o servidor fique livre.
+
+Fontes de áudio, por ordem: spotDL (YouTube Music → YouTube) e, para o que falhar (vídeo com restrição de idade, sem resultados, Spotify a limitar), uma fonte própria com yt-dlp que procura vários candidatos no YouTube Music, YouTube e SoundCloud, escolhe pela duração do Deezer, salta os bloqueados e embute capa, álbum, número e data do Deezer. Todos os ficheiros continuam a ser verificados (descodificados até ao fim) antes de entrarem na biblioteca.
+
+Se o spotDL ficar 10 minutos sem dar sinal, é terminado e a música passa à fonte alternativa — a fila nunca fica parada.

@@ -18,6 +18,7 @@ from mutagen.id3 import ID3
 from mutagen.mp4 import MP4Tags
 
 from .config import MUSIC_DIR
+from . import load
 from .db import get_conn, row
 
 log = logging.getLogger("lyrics")
@@ -190,6 +191,7 @@ def prefetch(limit=None):
         ids = [r[0] for r in conn.execute(sql + (f" LIMIT {int(limit)}" if limit else ""), (RETRY_AFTER,))]
         state.update(running=True, done=0, total=len(ids))
         for tid in ids:
+            load.wait_idle()           # prioridade 2: letras só quando não há músicas a descarregar
             try:
                 get(tid)
             except Exception:  # noqa
