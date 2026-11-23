@@ -5,6 +5,7 @@ a partir do texto "Artista - Título".
 """
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -22,8 +23,16 @@ def _get(path, params=None, ttl=300):
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
     req = urllib.request.Request(url, headers={"User-Agent": "Pobrefy/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.load(r)
+    # o DNS do router falha de vez em quando: 3 tentativas antes de desistir
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.load(r)
+            break
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == 2:
+                raise
+            time.sleep(0.6 * (attempt + 1))
     if isinstance(data, dict) and "error" in data:
         err = data["error"]
         raise RuntimeError(err.get("message", "erro do Deezer") if isinstance(err, dict) else str(err))
@@ -31,6 +40,33 @@ def _get(path, params=None, ttl=300):
         _cache.clear()
     _cache[url] = (time.time(), data)
     return data
+
+
+def itunes_match(artist, title, duration=None):
+    """Plano B para capa + prévia de 30 s: a pesquisa pública do iTunes (quando o Deezer não tem a faixa)."""
+    term = urllib.parse.urlencode({"term": f"{artist} {title}", "entity": "song", "limit": 8, "country": "PT"})
+    req = urllib.request.Request(f"https://itunes.apple.com/search?{term}", headers={"User-Agent": "Pobrefy/1.0"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        res = json.load(r).get("results") or []
+    want, who = dedupe.key_for(artist, title), dedupe.primary_artist(artist)
+    best = None
+    for x in res:
+        if not x.get("previewUrl"):
+            continue
+        dur = round((x.get("trackTimeMillis") or 0) / 1000) or None
+        if dedupe.key_for(x.get("artistName", ""), x.get("trackName", "")) == want and dedupe._close(duration, dur):
+            best = x
+            break
+        if best is None and who and dedupe.primary_artist(x.get("artistName", "")) == who \
+                and dedupe.norm(title)[:12] in dedupe.norm(x.get("trackName", "")):
+            best = x
+    if not best:
+        return None
+    art = (best.get("artworkUrl100") or "").replace("100x100bb", "300x300bb")
+    return {"id": None, "title": best.get("trackName") or title, "artist": best.get("artistName") or artist,
+            "album": best.get("collectionName") or "", "cover": art or None,
+            "duration": round((best.get("trackTimeMillis") or 0) / 1000) or duration, "preview": best["previewUrl"],
+            "explicit": best.get("trackExplicitness") == "explicit", "source": "itunes"}
 
 
 # ---------------------------------------------------------------- normalização

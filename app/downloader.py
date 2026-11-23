@@ -19,7 +19,7 @@ import mutagen
 from . import dedupe, load, lyrics, scanner, ytsource
 from . import settings as app_settings
 from . import catalog
-from .config import AUDIO_EXTS, DATA_DIR, MUSIC_DIR, SPOTDL_EXTRA_ARGS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
+from .config import AUDIO_EXTS, DATA_DIR, MUSIC_DIR, SPOTDL_EXTRA_ARGS, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, NICE
 from .db import get_conn, row
 
 log = logging.getLogger("downloader")
@@ -89,8 +89,9 @@ def build_cmd(queries, s, archive=None):
         out_fmt, bitrate = fmt, None
     else:
         out_fmt, bitrate = fmt, s["dl_bitrate"]
+    queries = [q.lstrip("-").strip() for q in queries if q.lstrip("-").strip()]   # nada que pareça uma opção
     cmd = [
-        "spotdl", "download", *queries,
+        *NICE, "spotdl", "download", *queries,
         "--output", app_settings.template(s),
         "--format", out_fmt,
         "--threads", str(s["dl_threads"]),
@@ -206,7 +207,7 @@ def _decoded_seconds(path: Path):
     """Descodifica o ficheiro todo e devolve quantos segundos de áudio tem de facto (None = erro).
     Um ficheiro cortado pode manter no cabeçalho a duração original: só a descodificação diz a verdade."""
     try:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-xerror", "-nostats", "-i", str(path), "-map", "0:a:0",
+        r = subprocess.run([*NICE, "ffmpeg", "-v", "error", "-xerror", "-nostats", "-i", str(path), "-map", "0:a:0",
                             "-f", "null", "-progress", "pipe:1", "-"], capture_output=True, text=True, timeout=600)
     except Exception:  # noqa
         return None

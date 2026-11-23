@@ -160,3 +160,15 @@ app/
 Fontes de áudio, por ordem: spotDL (YouTube Music → YouTube) e, para o que falhar (vídeo com restrição de idade, sem resultados, Spotify a limitar), uma fonte própria com yt-dlp que procura vários candidatos no YouTube Music, YouTube e SoundCloud, escolhe pela duração do Deezer, salta os bloqueados e embute capa, álbum, número e data do Deezer. Todos os ficheiros continuam a ser verificados (descodificados até ao fim) antes de entrarem na biblioteca.
 
 Se o spotDL ficar 10 minutos sem dar sinal, é terminado e a música passa à fonte alternativa — a fila nunca fica parada.
+
+## Segurança e manutenção (revisão de nov/2026)
+
+- Cada conta só consegue ver e alterar as suas playlists e playlists monitorizadas.
+- As ações do servidor (atualizar o yt-dlp, reler a pasta, apagar o histórico do spotDL, gerar todos os vídeos curtos, letras em massa, cookies, definições) são só para administradores.
+- O login bloqueia o IP durante 15 minutos depois de 8 tentativas falhadas. O cookie de sessão é `Secure` quando o acesso é por HTTPS.
+- O WebSocket do controlo remoto recusa ligações vindas de outros sites. As respostas levam cabeçalhos de segurança (`nosniff`, `SAMEORIGIN`, …).
+- Os pedidos de download nunca podem ser lidos como opções do spotDL.
+- spotDL, yt-dlp e ffmpeg correm com prioridade baixa (`nice`) para a app responder sempre.
+- Manutenção diária automática (com a fila vazia): histórico com mais de 1 ano, registos de downloads antigos, vídeos curtos de faixas apagadas, `PRAGMA optimize` e compactação do WAL.
+- O container usa DNS 1.1.1.1/8.8.8.8 (o do router falhava e deixava capas e prévias por carregar). A pasta de música vem de `MUSIC_HOST` no `.env`.
+- As prévias do Deezer passam por `/api/preview/{id}`, que pede sempre um link novo (os do Deezer expiram em 15 min). Quando o Deezer não tem a faixa, a capa e a prévia vêm do iTunes.

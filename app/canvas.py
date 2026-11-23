@@ -18,7 +18,7 @@ import threading
 import time
 from pathlib import Path
 
-from .config import DATA_DIR, MUSIC_DIR
+from .config import DATA_DIR, MUSIC_DIR, NICE
 from .db import get_conn, row
 
 log = logging.getLogger("canvas")
@@ -87,14 +87,14 @@ def _fetch_clip(artist: str, title: str, out_dir: Path):
         "--download-sections", f"*{CLIP_START}-{CLIP_START + CLIP_LEN}",
         "-o", str(out_dir / "clip.%(ext)s"),
     ]
-    subprocess.run(cmd, capture_output=True, text=True, timeout=240)  # --max-downloads sai com código 101
+    subprocess.run([*NICE, *cmd], capture_output=True, text=True, timeout=240)  # --max-downloads sai com código 101
     files = [p for p in out_dir.glob("clip.*") if p.stat().st_size > 10_000]
     return files[0] if files else None
 
 
 def _is_static(clip: Path):
     """True se o vídeo está quase todo parado (lyric video, capa fixa…)."""
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(clip), "-t", str(CLIP_LEN), "-an",
+    r = subprocess.run([*NICE, "ffmpeg", "-hide_banner", "-i", str(clip), "-t", str(CLIP_LEN), "-an",
                         "-vf", "freezedetect=n=0.003:d=2", "-f", "null", "-"],
                        capture_output=True, text=True, timeout=120)
     frozen = sum(float(x) for x in re.findall(r"freeze_duration:\s*([\d.]+)", r.stderr))
@@ -107,7 +107,7 @@ def _is_static(clip: Path):
 
 def _encode(clip: Path, out: Path):
     tmp = out.with_suffix(".tmp.mp4")
-    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", "0.3", "-i", str(clip), "-t", "8", "-an",
+    subprocess.run([*NICE, "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-threads", "1", "-ss", "0.3", "-i", str(clip), "-t", "8", "-an",
                     "-vf", "scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=24,format=yuv420p",
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-movflags", "+faststart", str(tmp)],
                    check=True, capture_output=True, timeout=180)
@@ -187,3 +187,15 @@ def stats():
             "(SELECT COUNT(*) FROM canvas WHERE status='ok') AS ok, "
             "(SELECT COUNT(*) FROM canvas WHERE status='none') AS none")
     return {**r, "queued": _q.qsize(), **state}
+
+
+def prune():
+    """Apaga vídeos curtos de faixas que já não existem na biblioteca."""
+    ids = {r[0] for r in get_conn().execute("SELECT id FROM tracks")}
+    n = 0
+    for p in CANVAS_DIR.glob("*.mp4"):
+        if p.stem.isdigit() and int(p.stem) not in ids:
+            p.unlink(missing_ok=True)
+            n += 1
+    if n:
+        log.info("vídeos curtos órfãos apagados: %d", n)

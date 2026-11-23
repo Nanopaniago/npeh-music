@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import canvas as canvasgen
@@ -18,6 +18,7 @@ from .remote import hub
 from . import settings as app_settings
 from .config import COVERS_DIR, MUSIC_DIR, SCAN_ON_START, SECRET_KEY
 from .db import CURRENT_UID, get_conn, init_db, row, rows
+from .db import maintenance as db_maintenance
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 STATIC = Path(__file__).parent / "static"
@@ -62,6 +63,18 @@ async def releases_loop():
         await asyncio.sleep(1800)
 
 
+async def maintenance_loop():
+    await asyncio.sleep(600)
+    while True:
+        try:
+            if not load.busy():
+                await asyncio.to_thread(db_maintenance)
+                await asyncio.to_thread(canvasgen.prune)
+        except Exception:  # noqa
+            logging.getLogger("maintenance").exception("falhou")
+        await asyncio.sleep(86400)
+
+
 def _after_job(job_id: int):
     sources.relink()                       # faixas novas entram nas playlists sincronizadas
     if not app_settings.get_all()["canvas_auto"]:
@@ -90,7 +103,8 @@ async def lifespan(app):
     downloader.AFTER_JOB.append(_after_job)
     canvasgen.start()
     tasks = [asyncio.create_task(downloader.worker()), asyncio.create_task(auto_scan_loop()),
-             asyncio.create_task(playlist_sync_loop()), asyncio.create_task(releases_loop())]
+             asyncio.create_task(playlist_sync_loop()), asyncio.create_task(releases_loop()),
+             asyncio.create_task(maintenance_loop())]
     if SCAN_ON_START or "genre" in migrated:
         # depois de atualizar de uma versão sem géneros, relê as etiquetas de tudo (uma vez)
         tasks.append(asyncio.create_task(asyncio.to_thread(scanner.scan, "genre" in migrated)))
@@ -104,7 +118,29 @@ app = FastAPI(title="Pobrefy", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 # ---------------------------------------------------------------- auth (vários utilizadores)
 ADMIN_ONLY = ("/api/users", "/api/settings", "/api/library/duplicates/remove", "/api/library/trash/empty",
-              "/api/system/update")
+              "/api/system", "/api/downloads/archive", "/api/canvas/generate-all", "/api/lyrics/prefetch", "/api/scan")
+SEC_HEADERS = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin", "X-Frame-Options": "SAMEORIGIN",
+               "Permissions-Policy": "microphone=(self), camera=(), geolocation=()"}
+_fails: dict[str, list[float]] = {}       # tentativas de login falhadas por IP (anti força bruta)
+
+
+def _client_ip(request) -> str:
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
+
+
+def _secure(request) -> bool:
+    return request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+
+
+@app.middleware("http")
+async def headers_mw(request: Request, call_next):
+    resp = await call_next(request)
+    for k, v in SEC_HEADERS.items():
+        resp.headers.setdefault(k, v)
+    if request.url.path.startswith("/static/") and resp.status_code == 200:
+        # os ficheiros levam ?v=… quando mudam: o browser pode guardá-los uma semana
+        resp.headers["Cache-Control"] = "public, max-age=604800"
+    return resp
 
 
 @app.middleware("http")
@@ -133,12 +169,22 @@ def me(request: Request):
 
 
 @app.post("/api/login")
-def login(response: Response, password: str = Body(...), username: str = Body("")):
-    u = users.login(username, password)
+async def login(request: Request, response: Response, password: str = Body(..., max_length=200),
+                username: str = Body("", max_length=64)):
+    ip, now = _client_ip(request), time.time()
+    recent = [t for t in _fails.get(ip, []) if now - t < 900]
+    if len(recent) >= 8:
+        raise HTTPException(429, "Demasiadas tentativas. Espera 15 minutos.")
+    u = await asyncio.to_thread(users.login, username, password)
     if not u:
-        time.sleep(1)
+        _fails[ip] = recent + [now]
+        if len(_fails) > 5000:
+            _fails.clear()
+        await asyncio.sleep(1)
         raise HTTPException(401, "Utilizador ou palavra-passe errados")
-    response.set_cookie(COOKIE, users.make_token(u), max_age=users.TOKEN_DAYS * 86400, httponly=True, samesite="lax")
+    _fails.pop(ip, None)
+    response.set_cookie(COOKIE, users.make_token(u), max_age=users.TOKEN_DAYS * 86400, httponly=True,
+                        samesite="lax", secure=_secure(request))
     return {"ok": True, "user": users.public(u)}
 
 
@@ -375,6 +421,8 @@ def tracks_by_ids(ids: list[int] = Body(..., embed=True)):
 # ---------------------------------------------------------------- identificar música (microfone)
 @app.post("/api/recognize")
 async def recognize_song(request: Request):
+    if int(request.headers.get("content-length") or 0) > 6_000_000:
+        raise HTTPException(413, "Gravação demasiado grande")
     raw = await request.body()
     if len(raw) < 2000:
         raise HTTPException(400, "Gravação demasiado curta")
@@ -501,18 +549,28 @@ def unlike(track_id: int):
 @app.post("/api/plays/{track_id}")
 def played(track_id: int):
     c = get_conn()
-    c.execute("INSERT INTO plays(track_id, user_id) VALUES (?, uid())", (track_id,))
-    c.execute("DELETE FROM plays WHERE played_at < strftime('%s','now') - 31536000")
+    c.execute("INSERT INTO plays(track_id, user_id) SELECT id, uid() FROM tracks WHERE id=?", (track_id,))
     c.commit()
     return {"ok": True}
 
 
 # ---------------------------------------------------------------- playlists
-def list_playlists():
+def _own(pid: int):
+    """A playlist tem de ser do utilizador atual (cada conta só mexe nas suas)."""
+    if not row("SELECT 1 AS ok FROM playlists WHERE id=? AND owner_id=uid()", (pid,)):
+        raise HTTPException(404, "Playlist não encontrada")
+
+
+def _own_source(sid: int):
+    if not row("SELECT 1 AS ok FROM pl_sources s JOIN playlists p ON p.id=s.playlist_id WHERE s.id=? AND p.owner_id=uid()", (sid,)):
+        raise HTTPException(404, "Playlist não encontrada")
+
+
+def list_playlists(only: int | None = None):
     pls = rows("""SELECT p.id, p.name, p.description, p.updated_at,
                   (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id=p.id) AS track_count,
                   (SELECT kind FROM pl_sources s WHERE s.playlist_id=p.id) AS synced
-                  FROM playlists p WHERE p.owner_id=uid() ORDER BY p.updated_at DESC""")
+                  FROM playlists p WHERE p.owner_id=uid() AND (? IS NULL OR p.id=?) ORDER BY p.updated_at DESC""", (only, only))
     for p in pls:
         p["covers"] = [r["album_id"] for r in rows(
             """SELECT DISTINCT t.album_id FROM playlist_tracks pt JOIN tracks t ON t.id=pt.track_id
@@ -536,7 +594,7 @@ def create_playlist(name: str = Body("Nova playlist", embed=True)):
 
 @app.get("/api/playlists/{pid}")
 def get_playlist(pid: int):
-    p = next((x for x in list_playlists() if x["id"] == pid), None)
+    p = next(iter(list_playlists(pid)), None)
     if not p:
         raise HTTPException(404)
     items = _fix(rows(TRACK_SELECT.replace("SELECT t.id,", "SELECT pt.id AS entry_id, pt.added_at AS entry_added, t.id,")
@@ -560,6 +618,7 @@ def import_playlist(url: str = Body(..., embed=True)):
 
 @app.post("/api/playlists/{pid}/sync")
 def sync_playlist(pid: int):
+    _own(pid)
     s = sources.info(pid)
     if not s:
         raise HTTPException(404, "Esta playlist não está sincronizada")
@@ -574,6 +633,7 @@ def list_sources():
 
 @app.patch("/api/sources/{sid}")
 def patch_source(sid: int, data: dict = Body(...)):
+    _own_source(sid)
     try:
         sources.update(sid, data)
     except ValueError as e:
@@ -583,6 +643,7 @@ def patch_source(sid: int, data: dict = Body(...)):
 
 @app.post("/api/sources/{sid}/sync")
 def sync_source(sid: int):
+    _own_source(sid)
     sources.start_sync(sid)
     return {"ok": True}
 
@@ -597,6 +658,7 @@ def sync_all_sources():
 
 @app.patch("/api/playlists/{pid}/source")
 def toggle_source(pid: int, enabled: bool = Body(..., embed=True)):
+    _own(pid)
     c = get_conn()
     c.execute("UPDATE pl_sources SET enabled=? WHERE playlist_id=?", (int(enabled), pid))
     c.commit()
@@ -606,6 +668,7 @@ def toggle_source(pid: int, enabled: bool = Body(..., embed=True)):
 @app.delete("/api/playlists/{pid}/source")
 def unlink_source(pid: int):
     """Deixa de sincronizar: a playlist fica como uma playlist normal."""
+    _own(pid)
     c = get_conn()
     c.execute("DELETE FROM pl_sources WHERE playlist_id=?", (pid,))
     c.commit()
@@ -625,6 +688,7 @@ def update_playlist(pid: int, data: dict = Body(...)):
 
 @app.delete("/api/playlists/{pid}")
 def delete_playlist(pid: int):
+    _own(pid)
     c = get_conn()
     c.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
     c.execute("DELETE FROM pl_sources WHERE playlist_id=?", (pid,))
@@ -635,6 +699,7 @@ def delete_playlist(pid: int):
 
 @app.post("/api/playlists/{pid}/tracks")
 def add_to_playlist(pid: int, track_ids: list[int] = Body(..., embed=True)):
+    track_ids = track_ids[:2000]
     c = get_conn()
     if not c.execute("SELECT 1 FROM playlists WHERE id=? AND owner_id=uid()", (pid,)).fetchone():
         raise HTTPException(404)
@@ -654,6 +719,7 @@ def add_to_playlist(pid: int, track_ids: list[int] = Body(..., embed=True)):
 
 @app.delete("/api/playlists/{pid}/entries/{entry_id}")
 def remove_from_playlist(pid: int, entry_id: int):
+    _own(pid)
     c = get_conn()
     c.execute("DELETE FROM playlist_tracks WHERE id=? AND playlist_id=?", (entry_id, pid))
     c.execute("UPDATE playlists SET updated_at=strftime('%s','now') WHERE id=?", (pid,))
@@ -663,6 +729,7 @@ def remove_from_playlist(pid: int, entry_id: int):
 
 @app.post("/api/playlists/{pid}/reorder")
 def reorder_playlist(pid: int, entry_ids: list[int] = Body(..., embed=True)):
+    _own(pid)
     c = get_conn()
     for i, eid in enumerate(entry_ids, 1):
         c.execute("UPDATE playlist_tracks SET position=? WHERE id=? AND playlist_id=?", (i, eid, pid))
@@ -761,30 +828,38 @@ def canvas(track_id: int, request: Request):
 
 
 # ---------------------------------------------------------------- downloads & scan
+def _clean_q(q: str) -> str:
+    # um pedido nunca pode começar por "-": seria lido pelo spotDL como uma opção da linha de comandos
+    return str(q).strip().lstrip("-").strip()[:500]
+
+
 @app.post("/api/downloads")
 def new_download(query: str | None = Body(None, embed=True),
                  queries: list[str] | None = Body(None, embed=True),
                  items: list[dict] | None = Body(None, embed=True),
                  label: str | None = Body(None, embed=True)):
     if items:  # músicas conhecidas: o servidor ignora as que já tens ou já estão na fila
-        jid, queued, skipped = downloader.enqueue_items(items, (label or "")[:160] or None)
+        jid, queued, skipped = downloader.enqueue_items(items[:500], (label or "")[:160] or None)
         return {"ids": [jid] if jid else [], "queued": queued, "skipped": skipped}
     if queries:  # vários pedidos num só job (ex.: um álbum inteiro)
-        qs = [q.strip() for q in queries if q and q.strip()][:200]
+        qs = [_clean_q(q) for q in queries if q and _clean_q(q)][:200]
         if not qs:
             raise HTTPException(400, "Sem pedidos")
         return {"ids": [downloader.enqueue("\n".join(qs), (label or "")[:160] or None)]}
-    q = (query or "").strip()
-    if not q:
+    q = (query or "").strip()[:20000]
+    parts = [_clean_q(p) for p in q.splitlines() if _clean_q(p)][:200]
+    if not parts:
         raise HTTPException(400, "Link ou pesquisa vazia")
-    ids = [downloader.enqueue(part.strip()) for part in q.splitlines() if part.strip()]
+    ids = [downloader.enqueue(p) for p in parts]
     return {"ids": ids}
 
 
 @app.get("/api/downloads")
 def list_downloads():
+    # o registo só vai para os 12 jobs mais recentes (antes: 50 × 1,5 KB a cada 2 s)
     jobs = rows("SELECT id, query, label, status, total, done, failed, created_at, finished_at, COALESCE(priority, 0) AS priority, "
-                "substr(log, -1500) AS log_tail FROM jobs ORDER BY id DESC LIMIT 50")
+                "CASE WHEN id >= (SELECT COALESCE(MIN(id),0) FROM (SELECT id FROM jobs ORDER BY id DESC LIMIT 12)) "
+                "THEN substr(log, -1500) END AS log_tail FROM jobs ORDER BY id DESC LIMIT 50")
     return {"jobs": jobs, "spotdl": downloader.spotdl_available(), "busy": load.busy()}
 
 
@@ -846,6 +921,18 @@ async def discover_search(q: str, type: str = "track"):
         raise HTTPException(502, f"Não foi possível pesquisar no Deezer ({e})")
 
 
+@app.get("/api/preview/{dz_id}")
+async def preview(dz_id: int):
+    """Redireciona para a prévia de 30 s do Deezer com um link novo (os links expiram ao fim de 15 min)."""
+    try:
+        t = await asyncio.to_thread(discover._get, f"/track/{dz_id}", None, 600)
+    except Exception:  # noqa
+        raise HTTPException(502, "Deezer indisponível")
+    if not t.get("preview"):
+        raise HTTPException(404, "Sem pré-visualização")
+    return RedirectResponse(t["preview"], status_code=302, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/discover/album/{aid}")
 async def discover_album(aid: int):
     try:
@@ -904,6 +991,8 @@ def system_info():
 @app.post("/api/settings/cookies")
 async def upload_cookies(request: Request):
     """Recebe o cookies.txt do YouTube (formato Netscape, exportado do browser)."""
+    if int(request.headers.get("content-length") or 0) > 2_000_000:
+        raise HTTPException(413, "Ficheiro demasiado grande")
     text = (await request.body()).decode("utf-8", "replace")
     if len(text) > 2_000_000 or ("youtube.com" not in text) or ("\t" not in text):
         raise HTTPException(400, "Isto não parece um cookies.txt do YouTube (formato Netscape).")
@@ -969,11 +1058,6 @@ def canvas_generate_all():
     return {"queued": canvasgen.request_all()}
 
 
-@app.get("/api/lyrics/status")
-def lyrics_status():
-    return lyrics.stats()
-
-
 @app.post("/api/system/update-ytdlp")
 async def update_ytdlp():
     try:
@@ -985,6 +1069,10 @@ async def update_ytdlp():
 # ---------------------------------------------------------------- controlo remoto (WebSocket)
 @app.websocket("/api/ws")
 async def ws_endpoint(ws: WebSocket):
+    origin = ws.headers.get("origin")
+    if origin and origin.split("://", 1)[-1] != ws.headers.get("host"):
+        await ws.close(code=4403)                 # outro site a tentar usar a sessão de quem está ligado
+        return
     u = await asyncio.to_thread(users.from_token, ws.cookies.get(COOKIE))
     if not u:
         await ws.close(code=4401)

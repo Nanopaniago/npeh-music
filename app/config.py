@@ -35,3 +35,8 @@ if not SECRET_KEY:
     else:
         SECRET_KEY = secrets.token_hex(32)
         key_file.write_text(SECRET_KEY)
+        key_file.chmod(0o600)
+
+# processos pesados (spotDL, yt-dlp, ffmpeg) correm com prioridade baixa: a app continua a responder enquanto trabalham
+import shutil as _sh
+NICE = ["nice", "-n", "10"] if _sh.which("nice") else []

@@ -140,6 +140,8 @@ def get_conn() -> sqlite3.Connection:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA synchronous=NORMAL")      # seguro com WAL e bem mais rápido nas escritas
+        conn.execute("PRAGMA temp_store=MEMORY")
         conn.create_function("uid", 0, lambda: CURRENT_UID.get())
         _local.conn = conn
     return conn
@@ -194,6 +196,12 @@ def init_db():
     if "release_date" not in {r[1] for r in conn.execute("PRAGMA table_info(albums)")}:
         conn.execute("ALTER TABLE albums ADD COLUMN release_date TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre_group)")
+    # índices para as consultas mais usadas (contagens de reproduções, playlists, itens de download)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_plays_track ON plays(track_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pt_track ON playlist_tracks(track_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dli_job ON dl_items(job_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_likes_track ON likes(track_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_release ON tracks(release_date)")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     if "label" not in cols:
@@ -212,3 +220,15 @@ def rows(sql, params=()):
 def row(sql, params=()):
     r = get_conn().execute(sql, params).fetchone()
     return dict(r) if r else None
+
+
+def maintenance():
+    """Limpeza diária: histórico antigo, registos de downloads velhos e compactação da base de dados."""
+    conn = get_conn()
+    conn.execute("DELETE FROM plays WHERE played_at < strftime('%s','now') - 31536000")
+    conn.execute("""DELETE FROM jobs WHERE status NOT IN ('queued','running') AND created_at < strftime('%s','now') - 2592000
+                    AND id NOT IN (SELECT id FROM jobs ORDER BY id DESC LIMIT 100)""")
+    conn.execute("DELETE FROM dl_items WHERE status NOT IN ('queued','running') AND job_id NOT IN (SELECT id FROM jobs)")
+    conn.commit()
+    conn.execute("PRAGMA optimize")
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")

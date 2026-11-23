@@ -21,7 +21,7 @@ from mutagen.mp4 import MP4, MP4Cover
 
 from . import catalog
 from . import settings as app_settings
-from .config import DATA_DIR
+from .config import DATA_DIR, NICE
 
 log = logging.getLogger("ytsource")
 COOKIES = DATA_DIR / "youtube-cookies.txt"
@@ -36,7 +36,7 @@ def _ytdlp():
 
 
 def _base():
-    cmd = [_ytdlp(), "--no-warnings", "--no-playlist", "--socket-timeout", "20", "--retries", "10", "--fragment-retries", "10"]
+    cmd = [*NICE, _ytdlp(), "--no-warnings", "--no-playlist", "--socket-timeout", "20", "--retries", "10", "--fragment-retries", "10"]
     if COOKIES.exists() and COOKIES.stat().st_size > 0:
         cmd += ["--cookies", str(COOKIES)]
     return cmd

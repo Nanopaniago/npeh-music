@@ -111,31 +111,49 @@ def build():
         e["score"] += 0.35 * (len(e["sources"]) - 1)        # consenso entre plataformas pesa
     top = sorted(merged.values(), key=lambda e: (-e["score"], min(e["sources"].values())))[:100]
 
-    # ligar cada entrada a uma faixa do Deezer (capa, prévia, download)
-    out = []
+    # ligar cada entrada a uma faixa do Deezer (capa, prévia, download); plano B: iTunes (capa + prévia)
+    out, missing = [], 0
     for rank, e in enumerate(top, 1):
-        dz = e.pop("_dz")
-        if not dz:
+        dz = e.pop("_dz") or _deezer_match(e)
+        t = discover._track(dz) if dz else None
+        if not t or not t.get("preview"):
             try:
-                who = dedupe.primary_artist(e["artist"]) or e["artist"]
-                what = re.sub(r"[\(\[].*", "", e["title"]).strip()
-                q = f'artist:"{who}" track:"{what}"'
-                res = discover._get("/search", {"q": q, "limit": 5}, ttl=86400).get("data") or []
-                want = _key(e["artist"], e["title"])
-                dz = next((t for t in res if _key((t.get("artist") or {}).get("name", ""), t.get("title", "")) == want), res[0] if res else None)
-                time.sleep(0.12)
+                it = discover.itunes_match(e["artist"], e["title"], e["duration"])
             except Exception:  # noqa
-                dz = None
-        t = discover._track(dz) if dz else {"id": None, "title": e["title"], "artist": e["artist"], "album": "",
-                                            "cover": None, "duration": e["duration"], "preview": None, "explicit": False}
+                it = None
+            if it:
+                t = {**it, "id": t["id"] if t else None, "album_id": t.get("album_id") if t else None} if t else it
+        if not t:
+            t = {"id": None, "title": e["title"], "artist": e["artist"], "album": "", "cover": None,
+                 "duration": e["duration"], "preview": None, "explicit": False}
+        missing += not t.get("preview")
         t.update(rank=rank, sources=e["sources"], score=round(e["score"], 3), chart_title=e["title"], chart_artist=e["artist"])
         out.append(t)
-    data = {"updated": int(time.time()), "sources": {k: {**SOURCES[k], "count": len(v)} for k, v in lists.items()},
+    data = {"updated": int(time.time()), "missing": missing, "sources": {k: {**SOURCES[k], "count": len(v)} for k, v in lists.items()},
             "errors": errors, "tracks": out}
     CACHE.write_text(json.dumps(data, ensure_ascii=False))
     _mem["data"] = data
     log.info("Top 100 Global atualizado (%s)", ", ".join(f"{k}: {len(v)}" for k, v in lists.items()))
     return data
+
+
+def _deezer_match(e):
+    """Procura a entrada no Deezer: primeiro artista+título exatos, depois pesquisa livre."""
+    who = dedupe.primary_artist(e["artist"]) or e["artist"]
+    what = re.sub(r"\s*[\(\[].*", "", e["title"]).strip()
+    want = _key(e["artist"], e["title"])
+    for q in (f'artist:"{who}" track:"{what}"', f"{who} {what}"):
+        try:
+            res = discover._get("/search", {"q": q, "limit": 8}, ttl=86400).get("data") or []
+        except Exception:  # noqa
+            res = []
+        time.sleep(0.12)
+        hit = next((t for t in res if _key((t.get("artist") or {}).get("name", ""), t.get("title", "")) == want), None)
+        if hit:
+            return hit
+        if res and q.startswith("artist:"):
+            return res[0]
+    return None
 
 
 def _lib_ids(tracks):
@@ -160,7 +178,9 @@ def get(force=False):
             data = _mem["data"] = json.loads(CACHE.read_text())
         except Exception:  # noqa
             data = None
-    stale = not data or time.time() - data.get("updated", 0) > TTL
+    # se ficaram faixas sem capa/prévia (ex.: falha de rede), tenta outra vez daqui a 20 min em vez de 6 h
+    ttl = TTL if not data or data.get("missing", 0) <= 3 else 1200
+    stale = not data or time.time() - data.get("updated", 0) > ttl or "missing" not in data
     if force or not data:
         with _lock:
             data = build()

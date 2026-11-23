@@ -1556,14 +1556,15 @@ function stopPreview() {
 }
 function togglePreview(t) {
   if (!t || !t.preview) return toast('Esta faixa não tem pré-visualização');
-  const key = 't' + t.id;
+  const key = 't' + (t.id ?? t.preview);
   if (PV.key === key) return stopPreview();
   const keep = PV.resume;
   PV.resume = false; stopPreview();                // para a anterior sem retomar a música principal
   PV.resume = keep || !audio.paused;               // se a música principal tocava, retoma no fim
   if (!audio.paused) { killFade(); audio.pause(); }
   PV.key = key;
-  pv.src = t.preview; pv.volume = muted ? 0 : master;
+  // os links do Deezer expiram 15 min depois de obtidos: o servidor pede sempre um novo
+  pv.src = t.id && /dzcdn\.net/.test(t.preview) ? `/api/preview/${t.id}` : t.preview; pv.volume = muted ? 0 : master;
   pv.play().catch(() => { toast('Não foi possível reproduzir a pré-visualização'); stopPreview(); });
   markPreview();
 }
@@ -1880,6 +1881,7 @@ function openMonPop(btn, sid) {
 async function monAfter(sid) { await renderMonitor(); const b = $(`[data-action="mon-menu"][data-sid="${sid || ''}"]`); if ($('#mon-pop') && b) openMonPop(b, sid); }
 
 async function refreshJobs() {
+  if (document.hidden) return;                     // separador em segundo plano: não gasta rede nem bateria
   if (Date.now() - MON.t > 15000) renderMonitor();
   let d;
   try { d = await api('/downloads'); } catch { return; }
@@ -1919,7 +1921,7 @@ function checkJobChanges(jobs) {
   return active;
 }
 setInterval(async () => {
-  if (route.name === 'downloads' || !Object.values(knownJobs).some((s) => s === 'running' || s === 'queued')) return;
+  if (document.hidden || route.name === 'downloads' || !Object.values(knownJobs).some((s) => s === 'running' || s === 'queued')) return;
   try { checkJobChanges((await api('/downloads')).jobs); } catch { /* */ }
 }, 5000);
 
